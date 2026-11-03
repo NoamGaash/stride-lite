@@ -2,7 +2,9 @@
 
 Where this is, what is left, and what was deliberately left out. Status as of 2026-11-03.
 
-Cost analysis is kept out of this repository — see the note at the end.
+Cost estimates are built from published AWS and Kamatera rates and are in
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md); what the project pays today is not — see the note
+at the end.
 
 ## Acceptance criteria
 
@@ -22,7 +24,7 @@ Three, set at the start, unchanged since:
 | 2 | GTFS ingest — the blocking gap | GTFS tables in ClickHouse, both enrichment macros off `postgresql()` | **partly** |
 | 3 | The remaining ETL processes | no Airflow, `system.view_refreshes` clean for 24 h | not started |
 | 4 | The TypeScript API | 27 of 27 endpoints identical to production | **13 of 27** |
-| 5 | Sizing and deployment | measured resource figures under continuous ingest | not started |
+| 5 | Pricing and deployment | measured resources, priced under the $150/month target | not started |
 
 ### Stage 1 — done
 
@@ -91,8 +93,11 @@ specified; neither is built.
 
 ### Stage 5 — not started
 
-Measure RSS and CPU under continuous ingest plus refresh — the figure that matters is the
-steady state, not a single query. Then deploy via the Terraform module in `infra/`.
+Measure RSS and CPU under continuous ingest plus refresh — the steady state is the figure
+that matters, not a single query. The current estimate from published AWS rates is **~$102/
+month** in eu-west-1 (m7g.large for ClickHouse, 200 GB gp3, t4g.small for the collector and
+API, CloudFront in front), against a $150 target; measured peak query memory was ≤25 MB, so
+8 GB is not optimistic. Then deploy via the Terraform module in `infra/`.
 
 ## Deliberately out of scope
 
@@ -133,7 +138,11 @@ a rewrite.
 
 ## On cost
 
-Every storage, RAM and throughput measurement needed to build a cost model is in
-[docs/BENCHMARKS.md](docs/BENCHMARKS.md). The cost model itself is not, and neither is what
-the project pays today: spend figures belong to the project's maintainers and are theirs to
-publish or not. The technical case stands on the measurements either way.
+The estimates in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) are derived from published AWS and
+Kamatera rates applied to specs declared in the public `hasadna-iac` Terraform, so they are
+reproducible from public information and are included in full.
+
+**What the project actually pays is not here.** That figure was reported to us privately and
+belongs to the project's maintainers to publish or not. Where the analysis needs it — the
+share of the bill that goes to ETL workers rather than to the database — the ratios are
+computed from the public specs, which gives the same conclusion without the invoice.

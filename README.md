@@ -25,6 +25,7 @@ loaded and counted, not extrapolated.
 | `siri_vehicle_location` (6.5 billion rows) | **1.34 TB** | **111.52 GiB** |
 | The entire database | ~692 GiB of data + ~760 GB of indexes | **163.22 GiB** |
 | Growth per year | +307 GB | **+36 GB** |
+| Estimated AWS bill | — | **~$102/month** |
 
 Three findings behind them:
 
@@ -116,10 +117,10 @@ The directory boundaries are kept clean from day one so that split is mechanical
 - **PostgreSQL wins one query** — a selective `line_ref` + bounding-box filter, 0.017 s
   against 0.063–0.090 s. B-tree indexes on `lon`/`lat` are the right tool there, and closing
   the gap with skip indexes is work not yet done.
-- **No cost figures here.** What the project pays today, and what any alternative would
-  cost, is the project owners' information to publish — not ours. The storage and resource
-  measurements those numbers would be derived from are all in
-  [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
+- The AWS estimate's one unquantified risk is **egress above CloudFront's free 1 TB**,
+  which needs a real traffic figure before anyone relies on the ~$102. The estimate itself is
+  built from published AWS rates; what the project pays today was reported privately and is
+  not in this repository.
 - **Projections are not in the 163 GiB.** Two of them take the honest total to ~219 GiB.
 - This repository does not answer the questions that actually decide a migration: who
   maintains it, what happens at 3 a.m., and what breaks in a provider move. Those are the

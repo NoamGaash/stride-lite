@@ -317,10 +317,13 @@ Recorded because the wrong versions were stated out loud before being corrected.
   `Files-Excluded: tsl` — Debian strips the TSL-licensed directory, so
   `ALTER TABLE … SET (timescaledb.compress …)` fails with
   `functionality not supported under the current "apache" license`. Compression requires the
-  build from Timescale's own apt repo. The Timescale License also places conditions on
-  redistribution and on offering the software as a service; whether a given deployment is
-  covered is a question for a lawyer and not for this document. ClickHouse is Apache-2.0 and
-  raises no equivalent question.
+  build from Timescale's own apt repo.
+  The Timescale License permits free production use with no fee and no user limit, but
+  places conditions on offering the software as a service. Whether a read-only public API,
+  or handing out direct SQL access (the ClickHouse repo already carries a
+  `limited_read_role.sql` migration), falls inside those conditions is a question for a
+  lawyer and not for this document. ClickHouse is Apache-2.0 and raises no equivalent
+  question.
 - **`distance_from_stop` contains garbage in the raw MOT feed** — values from −977,940,286
   to 1,229,615,254. Anything computing on that column needs to clamp or filter it.
 - **`gtfs_rides_agg` and `gtfs_rides_agg_by_hour` are materialized views**, and `pg_dump`
@@ -331,10 +334,12 @@ Recorded because the wrong versions were stated out loud before being corrected.
   `psql` because it is a plain dump rather than `-Fc`, and the restored database with its
   indexes would be several TB. Filtered streaming extraction is the practical route; a
   single streaming pass over the whole dump takes 22 minutes.
-- **The public dump is older than it looks.** `s3://openbus-stride-public/stride_db.sql.zst`
-  has `Last-Modified: 2026-06-14` and the data inside ends 2026-05-29. That is the window
-  every differential test case has to stay inside, and it is the single biggest constraint on
-  this work. Reported upstream separately rather than diagnosed here.
+- **The production backup is stale.** `s3://openbus-stride-public/stride_db.sql.zst` was
+  last modified 2026-06-14 despite a daily 01:37 cron and a StatusCake heartbeat that should
+  alert after two days. The `stride-etl-db-copy-backup-to-s3` DAG last ran in 2022; it reads
+  a file from the k8s deployment's NFS, and that deployment has `db.enabled: false`.
+  Reported upstream separately. For this work it is simply the constraint that bounds every
+  differential test case to data ending 2026-05-29.
 
 ## 11. Reproducing
 
@@ -366,9 +371,38 @@ measuring, or unsettled merges and bloat inflate the numbers.
 
 ## 11b. Storage cost
 
-Cost analysis — storage rates, provider comparisons and what the current infrastructure
-costs — is kept out of this public repository. Spend figures are the project owners' to
-publish, not ours. The storage *sizes* those numbers are derived from are all in §0 and §4.
+Monthly storage cost for `siri_vehicle_location` alone, at the sizes from §0.
+
+| Solution                              | Size    | Kamatera ($0.05/GB-mo) | AWS EBS gp3 ($0.08/GB-mo) |
+| ------------------------------------- | ------- | ---------------------- | ------------------------- |
+| PostgreSQL as today                   | 1.34 TB | **$67**                | **$107**                  |
+| TimescaleDB compressed                | 229 GB  | $11                    | $18                       |
+| ClickHouse — org's current schema     | 159 GB  | $8                     | $13                       |
+| ClickHouse — ordered by `vehicle_ref` | 72 GB   | $4                     | $6                        |
+
+Managed options, for reference: ClickHouse Cloud bills compressed storage at roughly
+$25.30/TB-mo (~$4 for 159 GB); Tiger Cloud (TimescaleDB) high-performance storage at roughly
+$0.15/GB-mo (~$34 for 229 GB), with tiered cold object storage around $0.02/GB-mo. Kamatera
+is listed because that is where Hasadna already runs (see `kamatera_server.rke2` in
+`hasadna-iac`).
+
+**Storage cost is not the argument for migrating.** The whole saving from 1.34 TB down to
+159 GB is about $60/month on the current provider. What costs real money is the RAM needed
+to serve queries over 1.34 TB — a Kamatera box with 8 GB is $40/month, and one with 32–64 GB
+is several hundred.
+
+Two things that _do_ make a financial case:
+
+- **Growth.** 4.08M rows/day is 1.49 billion rows/year: **+307 GB/year in PostgreSQL versus
+  +36 GB/year in ClickHouse.** PostgreSQL doubles roughly every 4.4 years, ClickHouse's
+  growth is a rounding error against the same provisioning.
+- **This is one table.** With `gtfs_ride_stop` and `siri_ride_stop` the whole database is
+  plausibly 2.5–3 TB, i.e. $125–150/month on Kamatera — but those two tables were not
+  measured in any engine, so that figure is inference from row counts, not measurement.
+
+Price caveat: the Kamatera and EBS rates are consistent across sources; the ClickHouse Cloud
+and Tiger Cloud rates come from third-party trackers that disagree with each other and could
+not be confirmed on the vendors' live pricing pages. Verify before relying on them.
 
 ## 11c. RAM
 
@@ -408,9 +442,62 @@ ordered by time.
 
 ## 11d. Traffic
 
-Measured API payload: **150 bytes/row as JSON, 17 bytes/row gzipped.** 10,000 rows is
-1.5 MB raw, 0.17 MB gzipped. Bandwidth pricing and allowances are omitted here for the same
-reason as §11b.
+Measured API payload: **150 bytes/row as JSON, 17 bytes/row gzipped.** Q1b's 10,000 rows is
+1.5 MB raw, 0.17 MB gzipped.
+
+Kamatera includes roughly 5 TB per server with overage at $0.01/GB, so across eight servers
+this traffic is almost certainly inside the included allowance. More importantly the database
+sits on the cluster's internal LAN, so API↔DB traffic is free.
+
+**That is the argument against DBaaS:** moving the database off-premises converts free LAN
+traffic into billed WAN traffic in both directions.
+
+Unverified caveat: every server is declared `cpu_type = "B"` (burstable), and one third-party
+source claims burstable instances get no free bandwidth. If true it changes this calculation.
+
+## 11e. What the Kamatera bill actually pays for
+
+Specs are declared in the public `hasadna-iac` Terraform, and the rates below are Kamatera's
+published ones. The actual invoice total was reported to us privately and is not ours to
+publish, so every figure here is derived from public information:
+
+| Server          | Cores   | RAM        | Disk                     |
+| --------------- | ------- | ---------- | ------------------------ |
+| stride-db       | 6       | 32 GB      | 3000 GB                  |
+| controlplane1   | 8       | 16 GB      | 100 GB                   |
+| critical1       | 8       | 16 GB      | 1100 GB                  |
+| critical2       | 8       | 16 GB      | 1100 GB                  |
+| worker1–worker4 | 24 each | 64 GB each | 750 / 950 / 250 / 250 GB |
+| **Total**       | **126** | **336 GB** | **7.5 TB**               |
+
+At Kamatera's published rates that is roughly **$1,950/month (₪7,200)**. Expect the real
+invoice to run higher than that: these per-unit rates come from small published plans, and
+larger configurations cost more per unit. The ratios below depend only on the specs, so they
+hold either way.
+
+The split is the point:
+
+|                                       | Share of the bill |
+| ------------------------------------- | ----------------- |
+| The four workers (Airflow + the ETLs) | **67%**           |
+| controlplane + critical nodes         | 19%               |
+| **The database server**               | **14%**           |
+
+**The database server is not most of the bill — the ETL workers are.** A migration that only
+changes storage caps its saving at the 3 TB disk: dropping to 1 TB saves about $100/month,
+4% of the bill.
+
+The real lever is in the org's own `PLAN.md`: "related ETL tasks are handled by clickhouse
+materialized views refreshed every 10 minutes". If the migration retires Airflow DAGs, it
+attacks the 67%, not the 14%. The Airflow scheduler alone requests 20–25 GB of RAM and 2
+cores in `values-hasadna.yaml`.
+
+**Next thing to measure:** which DAGs disappear under the ClickHouse design, and what RAM and
+CPU they consume today. That, not storage, decides whether this migration pays for itself.
+
+Caveat on the 67%: that is a cost allocation by server spec, not a measurement of what runs
+on those workers. The RKE2 cluster is shared with other Hasadna projects (meirim, migdar,
+odata), so "67% is workers" is not the same as "67% is Open Bus ETL".
 
 ## 11f. Why the ETL is expensive — measured
 
@@ -498,15 +585,15 @@ Operational risk worth naming: `VACUUM FULL` on a 1.34 TB table needs 1.34 TB of
 and hours of downtime. With 3 TB provisioned and most of it in use, that option may not be
 available at all.
 
-On DBaaS: ClickHouse needs 8–16 GB here, which fits inside the headroom the existing
-self-hosted cluster already has. Moving the database off-premises converts internal LAN
-traffic into billed WAN traffic in both directions, and for TimescaleDB raises the licensing
-question from §10. It buys maintenance time, not capacity.
+On DBaaS: Hasadna already owns 336 GB of RAM and 126 cores, and ClickHouse needs 8–16 GB, so
+it fits existing headroom at near-zero marginal cost. A managed service adds a new bill, adds
+egress that is currently free, and for TimescaleDB adds the licensing question from §10. It
+buys maintenance time, not money.
 
 ## 11g. Rebuild architecture — what the backend looks like without Airflow
 
-An experiment in rebuilding the whole backend ClickHouse-native, to measure what resources
-it actually needs. Two load-bearing claims, both verified here:
+An experiment in rebuilding the whole backend ClickHouse-native, to measure resources and
+price it on AWS against a $150/month target. Two load-bearing claims, both verified here:
 
 **ClickHouse ingests from S3 with no application code.**
 
@@ -651,23 +738,31 @@ Query latency, DuckDB v2.0.0 over local Parquet, median of 5:
 
 **DuckDB over local Parquet matches or beats ClickHouse** — 2× faster on Q2 and on Q4.
 
-And it is the smallest footprint of anything measured here. Full history as Parquet:
+And the storage cost nearly vanishes. Full history as Parquet:
 
-| | Size |
-| --- | --- |
-| Parquet, vehicle-ordered | **99 GB** |
-| Parquet, time-ordered | 151 GB |
-| ClickHouse | 173 GB |
-| PostgreSQL today | 1.46 TB |
+|                              | Size    | S3 Standard/month |
+| ---------------------------- | ------- | ----------------- |
+| Parquet, time-ordered        | 151 GB  | **$3.48**         |
+| Parquet, vehicle-ordered     | 99 GB   | **$2.28**         |
+| ClickHouse on EBS gp3        | 173 GB  | $13.84            |
+| PostgreSQL today on Kamatera | 1.46 TB | $73               |
 
 #### Where it breaks: Athena's billing model, not its technology
 
-Athena charges per terabyte scanned with a 10 MB minimum per query, so cost scales with
-traffic rather than being fixed — the opposite of an instance you rent by the hour. There is
-a crossover query volume above which a fixed instance wins; the arithmetic sits in the
-private cost analysis. Separately, and **not measured here**, Athena carries a query-planning
-latency floor of roughly a second even on tiny scans, which rules it out as the direct
-backend for an interactive map and keeps it well suited to ad-hoc analysis.
+Athena is $5 per TB scanned **with a 10 MB minimum per query**, so every query — however
+small — costs $0.00005. That makes the bill scale with traffic, the opposite of a fixed
+instance:
+
+|                 | Cost                                 |
+| --------------- | ------------------------------------ |
+| Fixed m7g.large | $66/month, unlimited queries         |
+| Athena          | $0.00005/query                       |
+| **Crossover**   | **1.32M queries/month = 44,000/day** |
+
+Below that Athena is cheaper with zero operations. Above it a fixed instance wins and the gap
+widens. Separately, and **not measured here**, Athena carries a query-planning latency floor
+of roughly a second even on tiny scans, which rules it out as the direct backend for an
+interactive map and keeps it well suited to ad-hoc analysis.
 
 #### The S3 latency question is open, and this machine cannot settle it
 
@@ -689,12 +784,27 @@ recent partitions local, history in S3, and let the engine span both — ClickHo
 tiered storage, DuckDB can union local and remote Parquet. That is not a compromise between
 the two approaches; it takes the cheap half of each.
 
-### Resource sizing
+### AWS cost estimate against the $150/month target
 
-Measured peak query memory was **≤25 MB**, so a 2 vCPU / 8 GB instance is not an optimistic
-sizing for ClickHouse here; a second small instance covers the collector and the API. The
-concrete instance choice, the monthly figures and the egress risk live in the private
-analysis, not in this repository.
+All in eu-west-1, where the raw archive already lives, so S3 reads are same-region and free.
+
+| Component                               | Monthly                                             |
+| --------------------------------------- | --------------------------------------------------- |
+| m7g.large (2 vCPU, 8 GB) for ClickHouse | $66                                                 |
+| EBS gp3, 300 GB                         | $24                                                 |
+| t4g.small for the collector and API     | $12                                                 |
+| Egress                                  | first 100 GB free; CloudFront free tier covers 1 TB |
+| **Total**                               | **~$102**                                           |
+
+**300 GB and not 200.** An earlier version of this table said 200 GB, which does not fit: the
+measured database is 163 GiB and the two projections the join-heavy endpoints need add about
+56 GiB, so ~219 GiB is the real requirement before any growth headroom.
+
+A t4g.xlarge (4 vCPU, 16 GB) on a 1-year reserved rate puts it at ~$124. Both fit the target.
+Measured query memory was ≤25 MB, so 8 GB is not optimistic.
+
+The unquantified risk is egress beyond the CloudFront free tier, which needs real API traffic
+volume — Cloudflare analytics would give it, and Hasadna already uses Cloudflare for DNS.
 
 ### Stage 1 result: the org's stack runs, and the enrichment works
 
