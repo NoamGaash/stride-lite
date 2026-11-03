@@ -51,6 +51,20 @@ jobs:
           n=$(./clickhouse client --query "SELECT count() FROM system.tables WHERE database='stride'")
           test "$n" = 16 || { echo "got $n tables, want 16"; exit 1; }
 
+      - name: Apply the raw landing table
+        run: ./clickhouse client --database stride --multiquery < db/raw.sql
+
+      - name: Apply the raw landing table
+        run: ./clickhouse client --database stride --multiquery < db/raw.sql
+
+      - name: Apply the continuous ingest
+        run: ./clickhouse client --database stride --multiquery < ingest/siri.sql
+
+      - name: Expect both refreshable views to be registered
+        run: |
+          n=$(./clickhouse client --query "SELECT count() FROM system.view_refreshes WHERE view LIKE 'siri_ingest%'")
+          test "$n" = 2 || { echo "got $n refreshable views, want 2"; exit 1; }
+
   terraform:
     runs-on: ubuntu-latest
     defaults:

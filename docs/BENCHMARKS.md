@@ -790,17 +790,18 @@ All in eu-west-1, where the raw archive already lives, so S3 reads are same-regi
 
 | Component                               | Monthly                                             |
 | --------------------------------------- | --------------------------------------------------- |
-| m7g.large (2 vCPU, 8 GB) for ClickHouse | $66                                                 |
-| EBS gp3, 300 GB                         | $24                                                 |
-| t4g.small for the collector and API     | $12                                                 |
-| Egress                                  | first 100 GB free; CloudFront free tier covers 1 TB |
-| **Total**                               | **~$102**                                           |
+| m7g.large (2 vCPU, 8 GB), ClickHouse + API | $66                                              |
+| EBS gp3, 300 GB data + 20 GB root          | $30                                              |
+| Egress                                     | first 100 GB free; CloudFront covers 1 TB        |
+| **Total**                                  | **~$96**                                         |
 
 **300 GB and not 200.** An earlier version of this table said 200 GB, which does not fit: the
 measured database is 163 GiB and the two projections the join-heavy endpoints need add about
 56 GiB, so ~219 GiB is the real requirement before any growth headroom.
 
-A t4g.xlarge (4 vCPU, 16 GB) on a 1-year reserved rate puts it at ~$124. Both fit the target.
+One instance and not two: measured peak query memory was ≤25 MB and the API is a stateless
+Node process, so `infra/main.tf` provisions a single box for both. A 1-year reserved rate
+brings the total to about $75.
 Measured query memory was ≤25 MB, so 8 GB is not optimistic.
 
 The unquantified risk is egress beyond the CloudFront free tier, which needs real API traffic

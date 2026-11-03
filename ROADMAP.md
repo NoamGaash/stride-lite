@@ -22,7 +22,7 @@ Three, set at the start, unchanged since:
 | --- | --- | --- | --- |
 | 1 | Run the org's existing ClickHouse stack | migrations apply, dbt models build, `ALIAS` columns return correct values | **done** |
 | 2 | GTFS ingest — the blocking gap | GTFS tables in ClickHouse, both enrichment macros off `postgresql()` | **partly** |
-| 3 | The remaining ETL processes | no Airflow, `system.view_refreshes` clean for 24 h | not started |
+| 3 | The remaining ETL processes | no Airflow, `system.view_refreshes` clean for 24 h | **SIRI ingest done**, rest not started |
 | 4 | The TypeScript API | 27 of 27 endpoints identical to production | **13 of 27** |
 | 5 | Pricing and deployment | measured resources, priced under the $150/month target | not started |
 
@@ -91,13 +91,35 @@ So: a builder that resolves base rows first and then fetches related tables by l
 list, plus a projection on each table whose foreign key is filtered but not sorted. Both are
 specified; neither is built.
 
+### Stage 3 — the SIRI ingest loop is done
+
+[`ingest/siri.sql`](ingest/siri.sql) closes the gap the org's `PLAN.md` lists as open:
+tracking which snapshots are loaded, and ingesting new ones as they arrive. Three objects, no
+Airflow. Measured against the live archive: one hour ingests in **5–6 s**, a redundant pass
+writes **0 rows in 0 s**, and the partition key lands as `2026/11` as intended.
+
+`ingest/backfill.sh` covers history, with the same dedup filter so it is re-runnable and safe
+to run while the live views are up.
+
+**The honest limit of it:** the loop lands rows in `siri_vehicle_location_raw`, the MOT feed
+as it arrives — every field a string, no foreign keys. The API serves
+`siri_vehicle_location`, which is typed and joined by integer id, and today that table comes
+from the dump. The materialized views that derive the second from the first are the
+enrichment, and they are **not built**. So new data arrives continuously and the API does not
+see it yet. Joining those up is the next piece of real work, and it is larger than the loop
+was.
+
+Also still to build in this stage: validate-snapshots, the ride aggregations
+(`gtfs_rides_agg`, `gtfs_rides_agg_by_hour`), and the packagers.
+
 ### Stage 5 — not started
 
 Measure RSS and CPU under continuous ingest plus refresh — the steady state is the figure
-that matters, not a single query. The current estimate from published AWS rates is **~$102/
-month** in eu-west-1 (m7g.large for ClickHouse, 200 GB gp3, t4g.small for the collector and
-API, CloudFront in front), against a $150 target; measured peak query memory was ≤25 MB, so
-8 GB is not optimistic. Then deploy via the Terraform module in `infra/`.
+that matters, not a single query. The current estimate from published AWS rates is **~$96/month**
+in eu-west-1 — one `m7g.large` running both ClickHouse and the API, a 300 GB `gp3` volume and
+CloudFront — against a $150 target, or about $75 on a one-year reserved rate. Measured peak
+query memory was ≤25 MB, so 8 GB is not optimistic. Full breakdown and the tradeoffs in
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Then deploy via the Terraform module in `infra/`.
 
 ## Deliberately out of scope
 

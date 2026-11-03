@@ -50,6 +50,16 @@ the window every differential test case has to stay inside.
 ./scripts/load-from-dump.sh stride_db.sql.zst
 ```
 
+For live data instead of the dump, add the raw landing table and the ingest loop:
+
+```bash
+./clickhouse client --database stride --multiquery < db/raw.sql
+./clickhouse client --database stride --multiquery < ingest/siri.sql
+```
+
+These feed `siri_vehicle_location_raw`, not the API's tables — `db/raw.sql` explains why they
+are separate, and ROADMAP.md covers the enrichment that would connect them.
+
 One streaming pass: `split-tables.awk` routes each `COPY` block to a per-table FIFO and 16
 `clickhouse client` processes insert in parallel. Nothing is staged on disk, so you need room
 for the dump plus ~164 GiB, not three times that.

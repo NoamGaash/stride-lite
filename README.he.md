@@ -1,6 +1,6 @@
 # stride-lite
 
-[English](README.md) · [מפת דרכים](ROADMAP.md) · [מדידות](docs/BENCHMARKS.md) · [הרצה מקומית](docs/LOCAL-DB.md)
+[English](README.md) · **[עלות, ביצועים, tradeoffs](docs/DEPLOYMENT.md)** · [מפת דרכים](ROADMAP.md) · [מדידות](docs/BENCHMARKS.md) · [הרצה מקומית](docs/LOCAL-DB.md)
 
 מימוש מחדש, מאפס, של ה-backend של
 [Open Bus Stride](https://github.com/hasadna/open-bus-stride-api)
@@ -21,6 +21,23 @@
 > [@NoamGaash](https://github.com/NoamGaash).
 > כל מספר כאן נמדד בפועל וניתן לשחזור לפי ההוראות ב-[docs/LOCAL-DB.md](docs/LOCAL-DB.md).
 > שום דבר כאן לא מצוטט מהזיכרון.
+
+## התחלה מהירה
+
+```bash
+curl https://clickhouse.com/ | sh && ./clickhouse server --daemon
+export CH_CLIENT="./clickhouse client"
+./scripts/apply-schema.sh                                  # 16 טבלאות
+CH_DB=stride ./ingest/backfill.sh 2026 11 03               # יום של SIRI חי מ-S3, כ-2 דקות
+./clickhouse client --database stride --multiquery < ingest/siri.sql   # ingest רציף, בלי scheduler
+cd api && npm ci && CH_DB=stride npm start                 # API על :8080
+```
+
+בלי Docker, בלי root, בלי credentials — הנתונים ציבוריים.
+
+השחזור המלא, כולל הדאמפ של 13.7 מיליארד השורות, ב-[docs/LOCAL-DB.md](docs/LOCAL-DB.md).
+
+העלות והמשאבים בענן ב-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## שלושת המספרים שהניעו את זה
 
@@ -88,7 +105,8 @@
 | שכבה | טכנולוגיה | קוד חדש |
 | --- | --- | --- |
 | איסוף SIRI | ה-`open-bus-siri-requester` הקיים, ללא שינוי | אין |
-| ingest של SIRI | ClickHouse `s3()` ועוד materialized view מתרענן | **אין** |
+| ingest של SIRI → טבלה גולמית | ClickHouse `s3()` ועוד materialized view מתרענן | [`ingest/siri.sql`](ingest/siri.sql) — 3 אובייקטים, בלי scheduler |
+| מהגולמי לטבלאות המוקלדות של ה-API | materialized views | **לא נבנה** |
 | ingest של GTFS | shell: curl, unzip, `clickhouse-client` | כ-15 שורות |
 | העשרה (enrichment) | materialized views של ClickHouse | **אין** |
 | תזמון | `REFRESH EVERY` של ClickHouse | **אין** |
@@ -96,11 +114,26 @@
 | API | TypeScript | השירות היחיד |
 | תשתית | Terraform | — |
 
-שתי הטענות שהכל נשען עליהן נבדקו ולא הונחו:
+**לופ ה-ingest בנוי ורץ** — וזה בדיוק החלק שה-`PLAN.md` של הסדנה עצמה עוד מסמן כפתוח
+("לעקוב אחרי snapshots שנטענו", "לטעון snapshots חדשים כשהם מגיעים", *probably via Airflow*).
 
-ClickHouse קרא 426,476 שורות משעה של snapshots ציבוריים ב-S3 בתוך 2.087 שניות ללא שום קוד
-אפליקטיבי, ו-`REFRESH EVERY 1 MINUTE` מדווח `status`, `next_refresh_time`, `exception`,
-`retry` ו-`progress` — בדיוק הנראות שבגללה יש Airflow, בתוך מסד הנתונים.
+זה שלושה אובייקטים בקובץ SQL אחד ובלי Airflow: טבלת `ReplacingMergeTree` של מזהי snapshots,
+view אינקרמנטלי שמתחזק אותה מהנתונים עצמם, ושני views מתרעננים שקוראים מ-S3 ומדלגים על מה
+שכבר בפנים.
+
+נמדד מול הארכיון החי: **שעה של snapshots נטענת ב-5-6 שניות, והרצה חוזרת על שעה שכבר נטענה
+כותבת 0 שורות ב-0 שניות.**
+
+**מה שהוא עוד לא עושה:** הוא מנחית שורות ב-`siri_vehicle_location_raw`, שזה הפיד של משרד
+התחבורה כפי שהוא מגיע — כל שדה string, בלי מפתחות זרים.
+
+ה-`siri_vehicle_location` שה-API משרת הוא מוקלד ומחובר במפתחות שלמים, והוא מגיע היום מהדאמפ.
+הגזירה של השני מהראשון היא ה-enrichment, והיא **לא נבנתה**.
+
+כלומר לופ ה-ingest אמיתי, והצינור עדיין לא שלם מקצה לקצה.
+
+`system.view_refreshes` מדווח `status`, `next_refresh_time`, `written_rows` ו-`exception` —
+בדיוק הנראות שבגללה יש Airflow, בתוך מסד הנתונים.
 
 **TypeScript ב-API בכוונה**, לא לפי טעם: ה-client הנוצר
 `@hasadna/open-bus-api-client` וה-[פרונטאנד](https://github.com/hasadna/open-bus-map-search)
@@ -115,6 +148,7 @@ ClickHouse קרא 426,476 שורות משעה של snapshots ציבוריים ב
 
 ```
 db/schema.sql     16 הטבלאות, כפי שנשלפו מהמסד הרץ
+ingest/           siri.sql (רציף, 3 אובייקטים), backfill.sh (היסטוריה)
 api/              שירות TypeScript — src/{sql,registry,server,ch}.ts
 infra/main.tf     מודול Terraform
 scripts/          apply-schema.sh, load-from-dump.sh
@@ -127,6 +161,8 @@ docs/             BENCHMARKS.md (הדוח המלא), LOCAL-DB.md
 
 ## הסתייגויות, בכוונה בגוף ה-README
 
+- **ה-ingest וה-API עוד לא מחוברים.** נתונים חדשים נוחתים בטבלה גולמית; ה-API קורא
+  מטבלאות מוקלדות שנטענו מהדאמפ. ה-enrichment שביניהם לא נבנה.
 - הגיבוי הציבורי הוא **בן 4.6 חודשים** — `Last-Modified: 2026-06-14`, והנתונים בתוכו
   נגמרים ב-29/05/2026. כל מקרה בדיקה דיפרנציאלי חייב להישאר בתוך החלון הזה, וזו האילוצה
   הגדולה ביותר על העבודה.

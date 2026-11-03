@@ -1,6 +1,6 @@
 # stride-lite
 
-[עברית](README.he.md) · [Roadmap](ROADMAP.md) · [Measurements](docs/BENCHMARKS.md) · [Run it locally](docs/LOCAL-DB.md)
+[עברית](README.he.md) · **[Cost, performance, tradeoffs](docs/DEPLOYMENT.md)** · [Roadmap](ROADMAP.md) · [Measurements](docs/BENCHMARKS.md) · [Run it locally](docs/LOCAL-DB.md)
 
 A from-scratch reimplementation of the [Open Bus Stride](https://github.com/hasadna/open-bus-stride-api)
 backend on ClickHouse. Same API contract, byte for byte; a fraction of the storage; no
@@ -14,6 +14,21 @@ look like if it were built today?**
 > [@NoamGaash](https://github.com/NoamGaash). Every number below was measured in a session
 > and is reproducible by the instructions in [docs/LOCAL-DB.md](docs/LOCAL-DB.md); nothing
 > here is quoted from memory.
+
+## Quickstart
+
+```bash
+curl https://clickhouse.com/ | sh && ./clickhouse server --daemon
+export CH_CLIENT="./clickhouse client"
+./scripts/apply-schema.sh                                  # 16 tables
+CH_DB=stride ./ingest/backfill.sh 2026 11 03               # a day of live SIRI from S3, ~2 min
+./clickhouse client --database stride --multiquery < ingest/siri.sql   # continuous ingest, no scheduler
+cd api && npm ci && CH_DB=stride npm start                 # API on :8080
+```
+
+No Docker, no root, no credentials — the data is public. The full reproduction, including the
+13.7-billion-row dump, is in [docs/LOCAL-DB.md](docs/LOCAL-DB.md); cost and cloud resources
+are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## The three numbers that motivated this
 
@@ -74,7 +89,8 @@ source and live probes reveal, each of which silently breaks a client if you get
 | Layer | Technology | New code |
 | --- | --- | --- |
 | SIRI collection | the existing `open-bus-siri-requester`, unchanged | none |
-| SIRI ingest | ClickHouse `s3()` + refreshable materialized view | **none** |
+| SIRI ingest → raw table | ClickHouse `s3()` + refreshable materialized view | [`ingest/siri.sql`](ingest/siri.sql) — 3 objects, no scheduler |
+| raw → the API's typed tables | ClickHouse materialized views | **not built** |
 | GTFS ingest | shell: curl, unzip, `clickhouse-client` | ~15 lines |
 | Enrichment | ClickHouse materialized views | **none** |
 | Scheduling | ClickHouse `REFRESH EVERY` | **none** |
@@ -82,10 +98,23 @@ source and live probes reveal, each of which silently breaks a client if you get
 | API | TypeScript | the only service |
 | Infrastructure | Terraform | — |
 
-Both load-bearing claims were tested, not assumed: ClickHouse read 426,476 rows from an hour
-of public S3 snapshots in 2.087 s with no application code, and `REFRESH EVERY 1 MINUTE`
-reports `status`, `next_refresh_time`, `exception`, `retry` and `progress` — the visibility
-Airflow is there to provide, inside the database.
+**The ingest loop is built and running**, which is the part the org's own `PLAN.md` still
+lists as open ("keep track of ingested siri snapshots", "ingest new snapshots as they arrive",
+*probably via Airflow*). It is three objects in one SQL file and no Airflow: a
+`ReplacingMergeTree` of snapshot ids, an incremental view that maintains it from the data
+itself, and two refreshable views that read S3 and skip what is already in. Measured against
+the live archive: **one hour of snapshots ingests in 5–6 s, and re-running an already-loaded
+hour writes 0 rows in 0 s.**
+
+**What it does not yet do:** it lands rows in `siri_vehicle_location_raw`, which is the MOT
+feed as it arrives — every field a string, no foreign keys. The API's `siri_vehicle_location`
+is typed and joined by integer id, and today it comes from the dump. Deriving the second from
+the first is the enrichment, and that is **not built**, so the ingest loop is real but the
+pipeline is not yet end to end.
+
+`system.view_refreshes` reports `status`, `next_refresh_time`,
+`written_rows` and `exception` — the visibility Airflow is there to provide, inside the
+database.
 
 **TypeScript for the API on purpose**, not by taste: the generated client
 `@hasadna/open-bus-api-client` and the [frontend](https://github.com/hasadna/open-bus-map-search)
@@ -99,6 +128,7 @@ is argued in [ROADMAP.md](ROADMAP.md).
 
 ```
 db/schema.sql     the 16 tables, dumped from the running instance
+ingest/           siri.sql (continuous, 3 objects), backfill.sh (history)
 api/              TypeScript service — src/{sql,registry,server,ch}.ts
 infra/main.tf     Terraform module
 scripts/          apply-schema.sh, load-from-dump.sh
@@ -111,6 +141,8 @@ The directory boundaries are kept clean from day one so that split is mechanical
 
 ## Honest caveats
 
+- **The ingest and the API are not joined up yet.** New data lands in a raw table; the API
+  reads typed tables loaded from the dump. The enrichment between them is unbuilt.
 - The public dump is **4.6 months old** — `Last-Modified: 2026-06-14`, data ending
   2026-05-29. Every differential test case has to stay inside that window, which is the
   single biggest constraint on this work.
