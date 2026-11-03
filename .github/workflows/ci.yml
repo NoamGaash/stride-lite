@@ -1,0 +1,91 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Drift between this API and production is what actually breaks a migration
+    # that runs for weeks, and a single PR never reveals it. Hence nightly.
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx vitest run tests/sql.test.ts
+
+  schema:
+    # The schema has to apply to a clean ClickHouse, which is cheap to prove and
+    # the thing most likely to rot silently as the DDL is edited.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start ClickHouse
+        run: |
+          curl -s https://clickhouse.com/ | sh
+          ./clickhouse server --daemon
+          for _ in $(seq 30); do ./clickhouse client --query 'SELECT 1' && break; sleep 2; done
+      - name: Apply the schema
+        env:
+          CH_CLIENT: ./clickhouse client
+        run: ./scripts/apply-schema.sh
+      - name: Expect 16 tables
+        run: |
+          n=$(./clickhouse client --query "SELECT count() FROM system.tables WHERE database='stride'")
+          test "$n" = 16 || { echo "got $n tables, want 16"; exit 1; }
+
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+  differential:
+    # Compares endpoints against the live production API, which is a non-profit's
+    # production service. Never on push: only on the nightly schedule or on
+    # demand, with requests spaced out.
+    #
+    # Disabled until a ClickHouse snapshot is published somewhere this runner can
+    # reach. Loading the 154 GB dump in CI is not viable; a trimmed snapshot of
+    # the test window is the intended input. See docs/LOCAL-DB.md.
+    if: false
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci
+      - run: npm start &
+      - run: npx wait-on http://127.0.0.1:8080/healthz --timeout 60000
+      - run: npx vitest run tests/differential.test.ts
+        env:
+          DIFF_DELAY_MS: '800'
