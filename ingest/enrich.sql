@@ -26,11 +26,54 @@
 --    loaded window therefore keeps a departure time this database cannot
 --    derive, which is what a backfill has to load oldest-hour-first to avoid.
 --
+-- 3. Every join to a big table is restricted to the batch first. ClickHouse
+--    hashes a join's right side whole, so joining siri_ride_stop unrestricted
+--    read 2.89 billion rows in 545 s and had not finished. The restriction is
+--    always by journey_ref, for the reason given under the ride step.
+--
 -- Each step is a plain view holding the SELECT, and a refreshable view that
 -- appends it. `ingest/enrich-once.sql` runs the same bodies as INSERTs for a
 -- backfill, so the logic exists once.
 --
 -- Apply with:  clickhouse client --database stride --multiquery < ingest/enrich.sql
+
+-- Which snapshots have already been turned into typed rows. Maintained from the
+-- data itself by an incremental view, exactly as `siri_snapshot_seen` is for the
+-- ingest, so the two cannot disagree and a crash cannot desynchronise them.
+CREATE TABLE IF NOT EXISTS siri_snapshot_enriched
+(
+    siri_snapshot_id Int32
+)
+ENGINE = ReplacingMergeTree
+ORDER BY siri_snapshot_id;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS siri_snapshot_enriched_mv
+TO siri_snapshot_enriched
+AS
+SELECT siri_snapshot_id
+FROM siri_vehicle_location
+GROUP BY siri_snapshot_id;
+
+-- The highest id handed out so far in siri_vehicle_location.
+--
+-- It exists because `max(id)` on that table is a full scan: it is sorted by
+-- (recorded_at_time, id), so the maximum of the second key is not at a known
+-- place. Measured at 149 s over 6.5 billion rows, every refresh, even when
+-- there was nothing to insert. The other tables are sorted by id, so their
+-- max(id) reads one granule and needs none of this.
+CREATE TABLE IF NOT EXISTS siri_vehicle_location_max_id
+(
+    marker UInt8,
+    max_id AggregateFunction(max, Int64)
+)
+ENGINE = AggregatingMergeTree
+ORDER BY marker;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS siri_vehicle_location_max_id_mv
+TO siri_vehicle_location_max_id
+AS
+SELECT 1 AS marker, maxState(id) AS max_id
+FROM siri_vehicle_location;
 
 -- One parsing view, read by all six steps. It casts the feed's strings once
 -- and drops readings with no coordinates, which is what production does:
@@ -54,7 +97,15 @@ SELECT
     toInt32(velocity) AS velocity,
     toInt32(distance_from_stop) AS distance_from_journey_start
 FROM siri_vehicle_location_raw
-WHERE vehicle_location_longitude != '' AND vehicle_location_latitude != '';
+WHERE vehicle_location_longitude != '' AND vehicle_location_latitude != ''
+  -- Snapshots already turned into typed rows are excluded here rather than at
+  -- each step, so a refresh costs what arrived since the last one instead of
+  -- rereading the whole landing table. Without this a no-op refresh still took
+  -- 2 m 33 s once the table held two hours of feed, and it would only grow.
+  AND siri_snapshot_id NOT IN (
+      SELECT snapshot_id FROM siri_snapshot
+      WHERE id IN (SELECT siri_snapshot_id FROM siri_snapshot_enriched FINAL)
+  );
 
 -- The dimensions. Small enough that `NOT IN` over the whole table is a
 -- non-issue: 17.8k routes and 36.5k stops in production today.
@@ -110,6 +161,17 @@ WHERE snapshot_id NOT IN (SELECT snapshot_id FROM siri_snapshot);
 -- a key column. The gtfs_* columns are the output of a separate enrichment that
 -- joins rides to the GTFS schedule, and are left NULL here.
 CREATE OR REPLACE VIEW enrich_ride_src AS
+WITH fresh AS (
+    SELECT
+        r.id AS siri_route_id,
+        v.journey_ref AS journey_ref,
+        v.vehicle_ref AS vehicle_ref,
+        argMin(v.scheduled_start_time, v.siri_snapshot_id) AS scheduled_start_time
+    FROM siri_feed AS v
+    INNER JOIN siri_route AS r
+        ON r.line_ref = v.line_ref AND r.operator_ref = v.operator_ref
+    GROUP BY siri_route_id, journey_ref, vehicle_ref
+)
 SELECT
     (SELECT ifNull(max(id), 0) FROM siri_ride)
         + toInt32(row_number() OVER (ORDER BY siri_route_id, journey_ref, vehicle_ref)) AS id,
@@ -126,23 +188,37 @@ SELECT
     CAST(NULL, 'Nullable(Int32)') AS route_gtfs_ride_id,
     CAST(NULL, 'Nullable(Int32)') AS gtfs_ride_id,
     CAST(NULL, 'Nullable(Int32)') AS scheduled_time_gtfs_ride_id
-FROM (
-    SELECT
-        r.id AS siri_route_id,
-        v.journey_ref AS journey_ref,
-        v.vehicle_ref AS vehicle_ref,
-        argMin(v.scheduled_start_time, v.siri_snapshot_id) AS scheduled_start_time
-    FROM siri_feed AS v
-    INNER JOIN siri_route AS r
-        ON r.line_ref = v.line_ref AND r.operator_ref = v.operator_ref
-    GROUP BY siri_route_id, journey_ref, vehicle_ref
-) AS fresh
-WHERE (siri_route_id, journey_ref, vehicle_ref)
-      NOT IN (SELECT (siri_route_id, journey_ref, vehicle_ref) FROM siri_ride);
+FROM fresh
+-- Unrestricted, `NOT IN` builds a set of all 110M rides: measured at 6.83 GiB,
+-- which no ceiling survives. So the right side is restricted to what the batch
+-- could possibly collide with, and the column to restrict on is journey_ref,
+-- not siri_route_id: a journey_ref carries its own date, so an hour's 19,668 of
+-- them matched 0 historical rides, while that same hour's 3,914 routes matched
+-- 91,961,186 — 83% of the table, which prunes nothing. The `by_natural_key`
+-- projection in db/projections.sql is sorted journey_ref first for this.
+WHERE (siri_route_id, journey_ref, vehicle_ref) NOT IN (
+    SELECT (siri_route_id, journey_ref, vehicle_ref)
+    FROM siri_ride
+    WHERE journey_ref IN (SELECT journey_ref FROM fresh)
+);
 
 -- A new ride's stops are new by definition, so this needs no lookup against
 -- the 2.8-billion-row table — only against the rides it hangs off.
 CREATE OR REPLACE VIEW enrich_ride_stop_src AS
+WITH fresh AS (
+    SELECT DISTINCT
+        rd.id AS siri_ride_id,
+        s.id AS siri_stop_id,
+        v.stop_order AS `order`
+    FROM siri_feed AS v
+    INNER JOIN siri_route AS r
+        ON r.line_ref = v.line_ref AND r.operator_ref = v.operator_ref
+    INNER JOIN (SELECT * FROM siri_ride WHERE journey_ref IN (SELECT journey_ref FROM siri_feed)) AS rd
+        ON rd.siri_route_id = r.id
+       AND rd.journey_ref = v.journey_ref
+       AND rd.vehicle_ref = v.vehicle_ref
+    INNER JOIN siri_stop AS s ON s.code = v.stop_code
+)
 SELECT
     (SELECT ifNull(max(id), 0) FROM siri_ride_stop)
         + row_number() OVER (ORDER BY siri_ride_id, `order`, siri_stop_id) AS id,
@@ -151,27 +227,29 @@ SELECT
     `order`,
     CAST(NULL, 'Nullable(Int32)') AS gtfs_stop_id,
     CAST(NULL, 'Nullable(Int64)') AS nearest_siri_vehicle_location_id
-FROM (
-    SELECT DISTINCT
-        rd.id AS siri_ride_id,
-        s.id AS siri_stop_id,
-        v.stop_order AS `order`
-    FROM siri_feed AS v
-    INNER JOIN siri_route AS r
-        ON r.line_ref = v.line_ref AND r.operator_ref = v.operator_ref
-    INNER JOIN siri_ride AS rd
-        ON rd.siri_route_id = r.id
-       AND rd.journey_ref = v.journey_ref
-       AND rd.vehicle_ref = v.vehicle_ref
-    INNER JOIN siri_stop AS s ON s.code = v.stop_code
-) AS fresh
-WHERE (siri_ride_id, siri_stop_id, `order`)
-      NOT IN (SELECT (siri_ride_id, siri_stop_id, `order`) FROM siri_ride_stop);
+FROM fresh
+-- Same shape, and more necessary: siri_ride_stop is 2.8 billion rows, so the
+-- unrestricted set is not merely large but impossible. A new ride's stops are
+-- new by definition, so only the rides in this batch have to be looked at, and
+-- the `by_siri_ride` projection makes that a seek.
+WHERE (siri_ride_id, siri_stop_id, `order`) NOT IN (
+    SELECT (siri_ride_id, siri_stop_id, `order`)
+    FROM siri_ride_stop
+    WHERE siri_ride_id IN (SELECT siri_ride_id FROM fresh)
+);
 
 -- The fact table.
+--
+-- Idempotency here is per snapshot, not per row, and that distinction is the
+-- whole point. A row is NOT uniquely identified by
+-- (siri_snapshot_id, siri_ride_stop_id, recorded_at_time): production holds 785
+-- genuine duplicates on that triple in a single measured hour, so filtering on
+-- it would silently drop rows production keeps. A snapshot, on the other hand,
+-- is processed exactly once upstream, which is the same granularity
+-- `siri_snapshot_seen` already uses for the ingest.
 CREATE OR REPLACE VIEW enrich_vehicle_location_src AS
 SELECT
-    (SELECT ifNull(max(id), 0) FROM siri_vehicle_location)
+    (SELECT ifNull(maxMerge(max_id), 0) FROM siri_vehicle_location_max_id)
         + row_number() OVER (ORDER BY recorded_at_time, siri_ride_stop_id) AS id,
     siri_snapshot_id,
     siri_ride_stop_id,
@@ -193,23 +271,26 @@ FROM (
         v.velocity AS velocity,
         v.distance_from_journey_start AS distance_from_journey_start
     FROM siri_feed AS v
-    INNER JOIN siri_snapshot AS sn ON sn.snapshot_id = v.siri_snapshot_id
+    INNER JOIN (
+        SELECT id, snapshot_id FROM siri_snapshot
+        WHERE snapshot_id IN (SELECT siri_snapshot_id FROM siri_feed)
+          AND id NOT IN (SELECT siri_snapshot_id FROM siri_snapshot_enriched FINAL)
+    ) AS sn ON sn.snapshot_id = v.siri_snapshot_id
     INNER JOIN siri_route AS r
         ON r.line_ref = v.line_ref AND r.operator_ref = v.operator_ref
-    INNER JOIN siri_ride AS rd
+    INNER JOIN (SELECT * FROM siri_ride WHERE journey_ref IN (SELECT journey_ref FROM siri_feed)) AS rd
         ON rd.siri_route_id = r.id
        AND rd.journey_ref = v.journey_ref
        AND rd.vehicle_ref = v.vehicle_ref
     INNER JOIN siri_stop AS s ON s.code = v.stop_code
-    INNER JOIN siri_ride_stop AS rs
+    INNER JOIN (
+        SELECT id, siri_ride_id, siri_stop_id, `order` FROM siri_ride_stop
+        WHERE siri_ride_id IN (
+            SELECT id FROM siri_ride WHERE journey_ref IN (SELECT journey_ref FROM siri_feed)
+        )
+    ) AS rs
         ON rs.siri_ride_id = rd.id AND rs.siri_stop_id = s.id AND rs.`order` = v.stop_order
-) AS fresh
-WHERE (siri_snapshot_id, siri_ride_stop_id, recorded_at_time)
-      NOT IN (
-          SELECT (siri_snapshot_id, siri_ride_stop_id, recorded_at_time)
-          FROM siri_vehicle_location
-          WHERE recorded_at_time >= (SELECT ifNull(min(recorded_at_time), toDateTime(0)) FROM siri_feed)
-      );
+) AS fresh;
 
 -- The chain. DEPENDS ON is what orders it: a step refreshes only after the one
 -- it reads from has finished, so a ride never looks for a route that is not

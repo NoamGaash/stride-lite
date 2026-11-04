@@ -289,6 +289,28 @@ Two rules fell out of that comparison, and both were wrong in the first attempt:
   production rows for an hour, against 407 empty ones in 335,227 raw rows. Keeping them
   returned four readings the production API does not.
 
+### What only the full database revealed
+
+The enrichment worked on a scratch database and was wrong on the real one, three times over,
+and every fault was invisible until the tables were billions of rows rather than thousands:
+
+| | Measured on the full database | After |
+| --- | --- | --- |
+| "Which of these rides already exist" built a set of all 110M rides | **6.83 GiB, over the ceiling** | 0.079 s, bounded by `journey_ref` |
+| Joining `siri_ride_stop` unrestricted | **2.89 billion rows read, 545 s, unfinished** | 3.8 s, bounded to the batch |
+| `max(id)` on `siri_vehicle_location` | **149 s a refresh, even with nothing to insert** | 0.130 s, from a high-water table |
+
+The second is the same fault as the API's heavy join, and the first and third are both about
+sort order: restricting by `siri_route_id` prunes nothing because an hour's 3,914 routes own
+91,961,186 historical rides, while its 19,668 `journey_ref`s own none; and `max(id)` is a full
+scan precisely on the one table that is sorted by `(recorded_at_time, id)` rather than by `id`.
+
+A fourth was a correctness fault rather than a performance one. Deduplicating on
+`(siri_snapshot_id, siri_ride_stop_id, recorded_at_time)` looked safe and is not a key:
+production holds **785 genuine duplicates on that triple in one measured hour**, so the filter
+would have silently dropped rows production keeps. Idempotency is per snapshot now, which is
+the granularity upstream processes at and the same one the ingest already used.
+
 `system.view_refreshes` reports `status`, `next_refresh_time`,
 `written_rows` and `exception` — the visibility Airflow is there to provide, inside the
 database.
