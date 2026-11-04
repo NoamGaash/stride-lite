@@ -1,5 +1,7 @@
 # Cost, resources, performance and tradeoffs
 
+[עברית](DEPLOYMENT.he.md)
+
 Five questions, answered with what was measured. Anything not measured is labelled.
 
 ---
@@ -82,31 +84,25 @@ because it is the map's query.
 No Docker, no root, no package manager.
 
 ```bash
-# 1. ClickHouse: one static binary
-curl https://clickhouse.com/ | sh
-./clickhouse server --daemon
-
-# 2. Schema — 16 tables
 git clone https://github.com/NoamGaash/stride-lite && cd stride-lite
-export CH_CLIENT="./clickhouse client"
-./scripts/apply-schema.sh
-./clickhouse client --database stride --multiquery < db/raw.sql   # the raw landing table
+./up.sh
+```
 
-# 3. Data. Either live from S3 (public, no credentials, ~6 s per hour):
-CH_DB=stride ./ingest/backfill.sh 2026 11 03
-#    …or the full 13.7-billion-row history from the public dump (~14 h, 164 GiB):
+That is all of it. `up.sh` fetches the ClickHouse binary, starts it under the resource
+ceilings in `ingest/local.xml`, creates the 16 tables and the raw landing table, installs the
+ingest and enrichment chains, backfills two hours of live SIRI from S3, and starts the API on
+:8080. `./up.sh 6` backfills six hours; `./up.sh 0` backfills none.
+
+```bash
+curl 'http://127.0.0.1:8080/siri_routes/list?limit=2'
+cd api && npm test       # 35 unit tests, no DB needed
+```
+
+For the full 13.7-billion-row history instead of live data (~14 h, 164 GiB):
+
+```bash
 curl -O https://openbus-stride-public.s3.eu-west-1.amazonaws.com/stride_db.sql.zst
 ./scripts/load-from-dump.sh stride_db.sql.zst
-
-# 4. Continuous ingest — new snapshots arrive by themselves, no scheduler
-./clickhouse client --database stride --multiquery < ingest/siri.sql
-
-# 5. The API
-cd api && npm ci && CH_DB=stride npm start      # http://127.0.0.1:8080
-curl 'http://127.0.0.1:8080/siri_routes/list?limit=2'
-
-# 6. Tests
-npm test                                         # 35 unit tests, no DB needed
 ```
 
 Watch the ingest:
@@ -180,14 +176,14 @@ Honest status, so nobody deploys this expecting a finished system:
 
 - **13 of 27 endpoints** match production byte for byte. 7 are registered but unverified,
   7 are unwritten (5 of those need hand-written aggregate SQL).
-- **`gtfs_ride_stop` and `siri_ride_stop` have no ETL.** They are loaded and measured; they
-  are not kept current. Together they are half the database.
-- **The ingest is not wired to the API.** `ingest/siri.sql` lands the MOT feed in
-  `siri_vehicle_location_raw` (all strings, no foreign keys). The API serves
-  `siri_vehicle_location`, which is typed and joined by integer id and today comes from the
-  dump. The materialized views that would derive one from the other are **not built**, so the
-  pipeline is not end to end.
-- **GTFS ingest is partial** — the enrichment macros still read GTFS out of PostgreSQL.
+- **`gtfs_ride_stop` has no ETL.** It is loaded and measured but not kept current, and it is
+  a quarter of the database on its own. `siri_ride_stop` is now maintained by the enrichment
+  chain.
+- **GTFS still ages from the dump.** SIRI flows end to end through
+  `ingest/siri.sql` → `ingest/enrich.sql` → the API, but the daily GTFS refresh from
+  `gtfs_archive/` is not built, and the enrichment macros still read GTFS out of PostgreSQL.
+- **61 rows in a measured minute differ from production** in `scheduled_start_time`, for one
+  vehicle with a sentinel journey ref. Cause not understood.
 - **The `siri_ride_stop` projection is predicted, not measured.**
 - **Resource figures under continuous ingest plus refresh have not been measured** for a
   sustained period. The ingest numbers above are per-hour, not a 24-hour steady state.

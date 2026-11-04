@@ -1,6 +1,6 @@
 # stride-lite
 
-[English](README.md) · **[מי החליט מה](#מי-החליט-מה)** · [עלות, ביצועים, tradeoffs](docs/DEPLOYMENT.md) · [מפת דרכים](ROADMAP.md) · [מדידות](docs/BENCHMARKS.md) · [הרצה מקומית](docs/LOCAL-DB.md)
+[English](README.md) · **[מי החליט מה](#מי-החליט-מה)** · [עלות, ביצועים, tradeoffs](docs/DEPLOYMENT.he.md) · [מפת דרכים](ROADMAP.he.md) · [מדידות](docs/BENCHMARKS.md) (אנגלית) · [הרצה מקומית](docs/LOCAL-DB.he.md)
 
 מימוש מחדש, מאפס, של ה-backend של
 [Open Bus Stride](https://github.com/hasadna/open-bus-stride-api)
@@ -19,7 +19,7 @@
 
 > 🤖 רוב העבודה בריפו הזה נעשתה על ידי Claude (סוכן AI) בעבודה עם
 > [@NoamGaash](https://github.com/NoamGaash).
-> כל מספר כאן נמדד בפועל וניתן לשחזור לפי ההוראות ב-[docs/LOCAL-DB.md](docs/LOCAL-DB.md).
+> כל מספר כאן נמדד בפועל וניתן לשחזור לפי ההוראות ב-[docs/LOCAL-DB.he.md](docs/LOCAL-DB.he.md).
 > שום דבר כאן לא מצוטט מהזיכרון.
 
 ## מי החליט מה
@@ -71,7 +71,7 @@
 
 ### מה הסוכן באמת עשה
 
-נמדד בסשן, וניתן לשחזור לפי [docs/LOCAL-DB.md](docs/LOCAL-DB.md):
+נמדד בסשן, וניתן לשחזור לפי [docs/LOCAL-DB.he.md](docs/LOCAL-DB.he.md):
 
 - טען את הדאמפ הציבורי המלא, 13,728,053,041 שורות, ומדד אחסון לכל טבלה ולכל מנוע.
 - כתב את ה-API: 20 מתוך 27 endpoints רשומים, **13 אומתו כזהים בית אחר בית** על 22 מקרים.
@@ -104,9 +104,9 @@
 
 בלי Docker, בלי root, בלי credentials — הנתונים ציבוריים.
 
-השחזור המלא, כולל הדאמפ של 13.7 מיליארד השורות, ב-[docs/LOCAL-DB.md](docs/LOCAL-DB.md).
+השחזור המלא, כולל הדאמפ של 13.7 מיליארד השורות, ב-[docs/LOCAL-DB.he.md](docs/LOCAL-DB.he.md).
 
-העלות והמשאבים בענן ב-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+העלות והמשאבים בענן ב-[docs/DEPLOYMENT.he.md](docs/DEPLOYMENT.he.md).
 
 ## שלושת המספרים שהניעו את זה
 
@@ -152,7 +152,7 @@
 
 תנאי הקבלה הוא 27 מתוך 27.
 
-[ROADMAP.md](ROADMAP.md) מפרט מה נשאר.
+[ROADMAP.he.md](ROADMAP.he.md) מפרט מה נשאר.
 
 ### מה החוזה באמת אומר
 
@@ -296,7 +296,7 @@ view אינקרמנטלי שמתחזק אותה מהנתונים עצמם, וש�
 **מה שחסר בכוונה:** dbt, scheduler, תור הודעות, שכבת cache, ORM.
 
 27 endpoints של GET עם סינון וסידור הם בניית שאילתות, לא מודל אובייקטים. כל השמטה מנומקת
-ב-[ROADMAP.md](ROADMAP.md).
+ב-[ROADMAP.he.md](ROADMAP.he.md).
 
 ## מבנה
 

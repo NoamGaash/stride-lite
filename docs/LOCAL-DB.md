@@ -1,7 +1,13 @@
 # Reproducing the local database
 
+[עברית](LOCAL-DB.he.md)
+
 Everything below runs against public data and needs no credentials. There is no
 access to Hasadna's production database at any point, and none is needed.
+
+**If you only want it running, `./up.sh` from the repository root does all of route B and
+starts the API.** The rest of this page is for when you want the full history, or want to
+know what each step does.
 
 Two routes. Pick by what you want to do.
 
@@ -50,15 +56,20 @@ the window every differential test case has to stay inside.
 ./scripts/load-from-dump.sh stride_db.sql.zst
 ```
 
-For live data instead of the dump, add the raw landing table and the ingest loop:
+For live data on top of the dump, add the raw landing table, the ingest loop and the
+enrichment:
 
 ```bash
 ./clickhouse client --database stride --multiquery < db/raw.sql
 ./clickhouse client --database stride --multiquery < ingest/siri.sql
+./clickhouse client --database stride --multiquery < ingest/enrich.sql
 ```
 
-These feed `siri_vehicle_location_raw`, not the API's tables — `db/raw.sql` explains why they
-are separate, and ROADMAP.md covers the enrichment that would connect them.
+From there the database keeps itself current: the feed lands in
+`siri_vehicle_location_raw` and six chained refreshable views derive the API's typed tables
+from it. After a backfill, run `ingest/enrich-once.sql` rather than waiting for the next
+refresh. **Backfill oldest hour first** — a ride's `scheduled_start_time` is taken from its
+earliest observation, so loading forwards gets the same answer the live loop would.
 
 One streaming pass: `split-tables.awk` routes each `COPY` block to a per-table FIFO and 16
 `clickhouse client` processes insert in parallel. Nothing is staged on disk, so you need room

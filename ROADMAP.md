@@ -1,6 +1,8 @@
 # Roadmap
 
-Where this is, what is left, and what was deliberately left out. Status as of 2026-11-03.
+[עברית](ROADMAP.he.md)
+
+Where this is, what is left, and what was deliberately left out. Status as of 2026-11-04.
 
 Cost estimates are built from published AWS and Kamatera rates and are in
 [docs/BENCHMARKS.md](docs/BENCHMARKS.md); what the project pays today is not — see the note
@@ -22,7 +24,7 @@ Three, set at the start, unchanged since:
 | --- | --- | --- | --- |
 | 1 | Run the org's existing ClickHouse stack | migrations apply, dbt models build, `ALIAS` columns return correct values | **done** |
 | 2 | GTFS ingest — the blocking gap | GTFS tables in ClickHouse, both enrichment macros off `postgresql()` | **partly** |
-| 3 | The remaining ETL processes | no Airflow, `system.view_refreshes` clean for 24 h | **SIRI ingest done**, rest not started |
+| 3 | The remaining ETL processes | no Airflow, `system.view_refreshes` clean for 24 h | **SIRI ingest and enrichment done**, rest not started |
 | 4 | The TypeScript API | 27 of 27 endpoints identical to production | **13 of 27** |
 | 5 | Pricing and deployment | measured resources, priced under the $150/month target | not started |
 
@@ -91,7 +93,7 @@ So: a builder that resolves base rows first and then fetches related tables by l
 list, plus a projection on each table whose foreign key is filtered but not sorted. Both are
 specified; neither is built.
 
-### Stage 3 — the SIRI ingest loop is done
+### Stage 3 — SIRI flows end to end
 
 [`ingest/siri.sql`](ingest/siri.sql) closes the gap the org's `PLAN.md` lists as open:
 tracking which snapshots are loaded, and ingesting new ones as they arrive. Three objects, no
@@ -101,15 +103,39 @@ writes **0 rows in 0 s**, and the partition key lands as `2026/11` as intended.
 `ingest/backfill.sh` covers history, with the same dedup filter so it is re-runnable and safe
 to run while the live views are up.
 
-**The honest limit of it:** the loop lands rows in `siri_vehicle_location_raw`, the MOT feed
-as it arrives — every field a string, no foreign keys. The API serves
-`siri_vehicle_location`, which is typed and joined by integer id, and today that table comes
-from the dump. The materialized views that derive the second from the first are the
-enrichment, and they are **not built**. So new data arrives continuously and the API does not
-see it yet. Joining those up is the next piece of real work, and it is larger than the loop
-was.
+[`ingest/enrich.sql`](ingest/enrich.sql) closes the other half. The loop lands rows in
+`siri_vehicle_location_raw` — the MOT feed as it arrives, every field a string, no foreign
+keys — and six chained refreshable views derive the typed, integer-keyed tables the API reads.
+`DEPENDS ON` orders the chain. Measured: six hours and 976,688 readings enrich in **1.6 s**,
+a redundant pass writes **0 rows**, and a new snapshot was observed propagating through all
+six steps on its own.
 
-Also still to build in this stage: validate-snapshots, the ride aggregations
+**What that unlocks is the differential test itself.** Every case until now had to sit inside
+the dump's window, which ends 2026-05-29. With fresh data flowing, the same minute of today
+can be compared against production directly. On one such minute:
+
+| | |
+| --- | --- |
+| Rows returned, production vs ours | **5,765 vs 5,765** |
+| Missing / extra readings | **0 / 0** |
+| Identical on every transit-data field | **5,685 of 5,746 — 98.94%** |
+
+Two contract rules came out of that comparison, both of which the first attempt got wrong:
+
+- **A ride is identified by `(siri_route_id, journey_ref, vehicle_ref)`**, not by its
+  `scheduled_start_time` — those three are already unique over 123,622 rides in a day of the
+  dump. The departure time is an attribute taken from the earliest observation. Keying on it
+  splits one ride into several whenever the feed revises it: 65 rows in one minute.
+- **Production drops readings with no coordinates.** Zero NULL locations in 432,143
+  production rows for an hour, against 407 empty ones in 335,227 raw rows.
+
+**The residual, unexplained:** 61 rows in that minute still differ in
+`siri_ride__scheduled_start_time`, all for one vehicle whose `journey_ref` is the sentinel
+`…-0`. Production reports a departure time that appears nowhere in six hours of the feed, so
+the cause is upstream ETL behaviour that has not been read yet. Open.
+
+Also still to build in this stage: the **daily GTFS refresh** from `gtfs_archive/` (SIRI is
+current, GTFS still ages from the dump), validate-snapshots, the ride aggregations
 (`gtfs_rides_agg`, `gtfs_rides_agg_by_hour`), and the packagers.
 
 ### Stage 5 — not started
@@ -154,8 +180,10 @@ a rewrite.
   Quote 219, not 163.
 - **The `siri_ride_stop` projection is predicted, not measured.** The 0.015 s figure above is
   measured on `gtfs_ride_stop`; the second one is inferred from it.
-- **Neither `gtfs_ride_stop` nor `siri_ride_stop` has an ETL** that would keep it current.
-  They are loaded and measured; they are not maintained.
+- **`siri_ride_stop` is now maintained; `gtfs_ride_stop` is not.** The SIRI chain keeps the
+  first current, but nothing refreshes GTFS, so routes and stops age from the dump.
+- **61 rows in a measured minute still differ from production** in `scheduled_start_time`,
+  cause unknown — see stage 3.
 - **The public dump is 4.6 months old**, which bounds every differential test case.
 
 ## On cost
