@@ -147,6 +147,10 @@ const cases: Case[] = [
   // ---- the seven hand-written aggregate endpoints ----
   { path: '/gtfs_agencies/list', params: { date_from: DAY, date_to: DAY, limit: '20' } },
   { path: '/gtfs_agencies/list', params: { date_from: DAY, date_to: DAY, limit: '5', offset: '3' } },
+  // Production cannot serve this one: measured at an 86 s and a 103 s statement
+  // timeout on a single day. The data behind it is verified through
+  // /gtfs_rides_agg/group_by below, which reads the same aggregate and does
+  // answer; what stays unverified is only this handler's row shaping.
   {
     path: '/gtfs_rides_agg/list',
     params: { date_from: DAY, date_to: DAY, limit: '5' },
@@ -160,6 +164,18 @@ const cases: Case[] = [
   {
     path: '/gtfs_rides_agg/group_by',
     params: { date_from: DAY, date_to: DAY, group_by: 'gtfs_route_date,operator_ref' },
+    unordered: true,
+  },
+  // On DAY every num_actual_rides is 0, because the ETL that fills
+  // siri_ride.scheduled_time_gtfs_ride_id collapsed in September 2024 and has
+  // been exactly zero since January 2025. That makes DAY useless for checking
+  // the one subtle part of the aggregate: upstream's count(*) over a LEFT JOIN
+  // counts a gtfs_ride once per matching siri_ride. This date still has real
+  // matches — 608 actual of 909 planned for operator 2 — so it is what verifies
+  // `sum(greatest(n, 1))`.
+  {
+    path: '/gtfs_rides_agg/group_by',
+    params: { date_from: '2024-08-14', date_to: '2024-08-14', group_by: 'operator_ref' },
     unordered: true,
   },
   {

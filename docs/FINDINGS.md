@@ -13,7 +13,36 @@ here required access to Hasadna's database.
 
 ---
 
-## 1. `/stop_arrivals/list` cannot return a row, for any input
+## 1. "Actual rides" has been zero for two years
+
+`siri_ride.scheduled_time_gtfs_ride_id` is what matches a ride that happened to
+a ride that was planned. Summed out of the aggregate the API serves:
+
+| Month | Planned rides | Actual rides |
+| --- | --- | --- |
+| 2024-07 | 3,085,318 | 2,883,279 |
+| 2024-08 | 2,940,066 | 2,737,426 |
+| 2024-09 | 3,000,929 | 1,469,770 |
+| 2024-10 | 2,548,446 | **44** |
+| 2024-11 | 2,839,647 | **24** |
+| 2024-12 | 3,131,037 | **6** |
+| 2025-01 onwards | ~2.9M a month | **0** |
+
+So `/gtfs_rides_agg/list` and `/gtfs_rides_agg/group_by` report that no planned
+ride has been executed since January 2025, for every operator and every line.
+Anything built on that number — a dashboard panel comparing planned against
+actual — has been showing zero for two years.
+
+The matching degraded through September 2024 and stopped in October, which
+looks like a process that broke rather than one that was turned off.
+
+Verified against production, not only here: `/gtfs_rides_agg/group_by` for
+2026-05-20 returns `total_actual_rides: 0` for all 36 operators from both, and
+for 2024-08-14 both return the same real numbers for all 37 — 608 actual of 909
+planned for operator 2. The implementation agrees with production; it is the
+data that stopped.
+
+## 2. `/stop_arrivals/list` cannot return a row, for any input
 
 The endpoint joins `siri_ride_stop.nearest_siri_vehicle_location_id` to
 `siri_vehicle_location`. Both ends of that join have moved out from under it:
@@ -38,7 +67,7 @@ Two separate causes, and both are worth knowing:
 The endpoint's docstring already says "Currently, only planned time (gtfs) is
 returned for every stop". In practice nothing is returned at all.
 
-## 2. The public dump is not a subset of production
+## 3. The public dump is not a subset of production
 
 This one changes how any comparison has to be set up, and it is easy to get
 backwards. The 2026-06-14 dump holds `siri_vehicle_location` rows back to
@@ -49,7 +78,7 @@ So the two databases are different sets, overlapping only between
 **2025-01-01 and 2026-05-29**. A differential test outside that window fails for
 a reason that is not a defect at either end.
 
-## 3. Production times out on three of its own endpoints
+## 4. Production times out on three of its own endpoints
 
 Measured today, same parameters against both:
 
@@ -64,7 +93,7 @@ Measured today, same parameters against both:
 `gtfs_route` is a user-visible cost for something a column store does in
 milliseconds.
 
-## 4. `/siri_velocity_aggregation` is not reproducible
+## 5. `/siri_velocity_aggregation` is not reproducible
 
 Its rolling average uses `ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING` over
 `ORDER BY recorded_at_time`, and that order is not unique: **38,230 of 74,320
@@ -80,14 +109,14 @@ third decimal.
 A deterministic version needs a tiebreaker in the window's `ORDER BY`, or a
 `RANGE` frame instead of `ROWS`.
 
-## 5. `/siri_ride_stops/list` silently ignores `gtfs_stop_ids`
+## 6. `/siri_ride_stops/list` silently ignores `gtfs_stop_ids`
 
 `?gtfs_stop_ids=13429736` returns the newest rows, whose `gtfs_stop_id` is
 `null` — the parameter is not declared on that handler, so FastAPI drops it
 without complaint. A caller gets a successful response to a filter that was
 never applied, which is worse than an error.
 
-## 6. The database backup has been stale for five months
+## 7. The database backup has been stale for five months
 
 `stride_db.sql.zst` answers `Last-Modified: Sun, 14 Jun 2026`, and the data
 inside ends 2026-05-29. Re-checked 2026-11-04. The
@@ -97,7 +126,7 @@ This is unrelated to everything else here and is the most urgent of them: the
 raw SIRI archive is intact and current, but a database rebuilt from it would
 lose every ETL-derived table.
 
-## 7. Two contract details that are not in the spec
+## 8. Two contract details that are not in the spec
 
 Found by comparison, both of which silently corrupt a reimplementation:
 
@@ -109,7 +138,7 @@ Found by comparison, both of which silently corrupt a reimplementation:
   with nulls. Zero null locations in 432,143 production rows for an hour,
   against 407 empty ones in 335,227 raw rows for the same hour.
 
-## 8. PostgreSQL's text ordering is not byte ordering
+## 9. PostgreSQL's text ordering is not byte ordering
 
 `/gtfs_agencies/list` orders by `agency_name` through the database's glibc
 collation, which compares first ignoring punctuation and whitespace and then in
