@@ -93,9 +93,14 @@ jobs:
     # production service. Never on push: only on the nightly schedule or on
     # demand, with requests spaced out.
     #
-    # Disabled until a ClickHouse snapshot is published somewhere this runner can
-    # reach. Loading the 154 GB dump in CI is not viable; a trimmed snapshot of
-    # the test window is the intended input. See docs/LOCAL-DB.md.
+    # Covers all 27 endpoints, and a coverage test fails if the published spec
+    # grows one this suite does not exercise.
+    #
+    # Still disabled, and only for want of data: loading the 154 GB dump in CI is
+    # not viable, so this needs a trimmed ClickHouse snapshot of the comparison
+    # window published somewhere the runner can reach. That window is bounded at
+    # both ends — 2025-01-01, where production's retention starts, to
+    # 2026-05-29, where the dump's data ends. See docs/FINDINGS.md.
     if: false
     runs-on: ubuntu-latest
     defaults:

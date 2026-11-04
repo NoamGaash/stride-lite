@@ -8,22 +8,23 @@ Five questions, answered with what was measured. Anything not measured is labell
 
 ## 1. What will it cost
 
-**One VM, one disk, a CDN in front. ~$95–100/month in eu-west-1.**
+**One VM, one disk, a CDN in front. ~$105/month in eu-west-1.**
 
 | Resource | Size | Published rate | Monthly |
 | --- | --- | --- | --- |
 | EC2 `m7g.large` | 2 vCPU, 8 GB, Graviton | ~$0.091/h | **$66** |
-| EBS `gp3` data volume | 300 GB | ~$0.092/GB-mo | **$28** |
+| EBS `gp3` data volume | 400 GB | ~$0.092/GB-mo | **$37** |
 | EBS `gp3` root volume | 20 GB | ~$0.092/GB-mo | **$2** |
 | CloudFront | first 1 TB/month | free tier | **$0** |
 | S3 reads | same-region | free | **$0** |
-| **Total** | | | **~$96** |
+| **Total** | | | **~$105** |
 
-Reserve the instance for a year and it drops to roughly $45, putting the total near **$75**.
+Reserve the instance for a year and it drops to roughly $45, putting the total near **$84**.
 
-**Why 300 GB:** the whole database measured **163 GiB**, and the two projections the
-join-heavy endpoints need add **~56 GiB**, so ~219 GiB is the real requirement. 300 GB leaves
-about two years of growth at the measured +36 GiB/year.
+**Why 400 GB:** the database measured **163.22 GiB**, and the three projections the
+join-heavy endpoints need add **68.13 GiB** — measured, not predicted — so **231.82 GiB** is the
+real requirement. 300 GB would leave about 1.3 years of growth at the measured +36 GiB/year,
+which is too tight to commit to; 400 GB leaves about four years for $9 more a month.
 
 **Why one instance and not two:** ClickHouse's measured peak query memory was **≤25 MB** and
 the API is a stateless Node process. They fit on one box with room to spare. `infra/main.tf`
@@ -126,7 +127,7 @@ that never needs rescheduling. `infra/main.tf` provisions:
 | Terraform resource | What it is | Why |
 | --- | --- | --- |
 | `aws_instance.app` | one `m7g.large`, 20 GB root | runs ClickHouse **and** the API |
-| `aws_ebs_volume.data` + attachment | 300 GB `gp3` | the database; separate so the instance can be replaced under it |
+| `aws_ebs_volume.data` + attachment | 400 GB `gp3` | the database; separate so the instance can be replaced under it |
 | `aws_cloudfront_distribution.api` | CDN, 300 s default TTL | caches the repeated query strings the frontend issues, which bounds egress |
 | `aws_security_group.api` | 80/443 open, SSH from `var.ssh_cidr` | `ssh_cidr` has no default on purpose |
 | `aws_iam_role.instance` + SSM policy | instance profile | shell access via SSM, so no key to manage |
@@ -153,7 +154,7 @@ Ordered by how much they buy.
 
 | Tradeoff | Gain | Cost |
 | --- | --- | --- |
-| **Add the two projections** | join-heavy endpoints 4.35 s → 0.015 s | +56 GiB (163 → 219 GiB), ~2 h to build each |
+| **Add the three projections** | a foreign-key lookup on `siri_ride_stop` 44 s → 0.016 s | +68.13 GiB (163.22 → 231.82 GiB), ~25 min to build each under the local I/O cap |
 | **Sort `siri_vehicle_location` by `vehicle_ref`** | 163 GiB → ~72 GiB, 2.2× smaller | per-vehicle queries win, time-range queries lose; the current sort is the safer default |
 | **Refresh every 5 min instead of 1** | 5× fewer S3 list calls | data up to 5 min stale instead of 1 |
 | **Drop the `previous`-hour view** | one object fewer | a missed refresh silently loses an hour until someone backfills |
@@ -174,8 +175,7 @@ all history once a minute.
 
 Honest status, so nobody deploys this expecting a finished system:
 
-- **13 of 27 endpoints** match production byte for byte. 7 are registered but unverified,
-  7 are unwritten (5 of those need hand-written aggregate SQL).
+- **27 of 27 endpoints** match production byte for byte, over 48 differential tests.
 - **`gtfs_ride_stop` has no ETL.** It is loaded and measured but not kept current, and it is
   a quarter of the database on its own. `siri_ride_stop` is now maintained by the enrichment
   chain.

@@ -25,7 +25,7 @@ Three, set at the start, unchanged since:
 | 1 | Run the org's existing ClickHouse stack | migrations apply, dbt models build, `ALIAS` columns return correct values | **done** |
 | 2 | GTFS ingest — the blocking gap | GTFS tables in ClickHouse, both enrichment macros off `postgresql()` | **partly** |
 | 3 | The remaining ETL processes | no Airflow, `system.view_refreshes` clean for 24 h | **SIRI ingest and enrichment done**, rest not started |
-| 4 | The TypeScript API | 27 of 27 endpoints identical to production | **13 of 27** |
+| 4 | The TypeScript API | 27 of 27 endpoints identical to production | **done** |
 | 5 | Pricing and deployment | measured resources, priced under the $150/month target | not started |
 
 ### Stage 1 — done
@@ -56,29 +56,24 @@ times worse than storing them. PostgreSQL's data model is right; it simply pays 
 bytes for it. Materialising the expansion is both cheaper and simpler than query-time
 calendar expansion, which would also have to re-derive service dates on every request.
 
-### Stage 4 — 13 of 27
+### Stage 4 — done, 27 of 27
 
 | | Count |
 | --- | --- |
-| Matching production, byte for byte | **13** |
-| Registered, not yet verified | 7 |
-| Not written | 7 |
+| Matching production, byte for byte | **27** |
+| Differential tests passing | **48**, covering every endpoint in the published spec |
 
-The 13 are verified by 22 differential cases comparing normalised JSON — not status codes —
-against the live production API. 35 unit tests cover SQL generation and need no database.
+Twenty of them come from the query builder in `api/src/sql.ts`. The other seven are
+hand-written aggregate SQL upstream rather than filter-and-sort over one table, so they get a
+second mechanism in `api/src/raw.ts`: `/gtfs_agencies/list`, `/gtfs_rides_agg/list`,
+`/gtfs_rides_agg/group_by`, `/rides_execution/list`, `/route_timetable/list`,
+`/stop_arrivals/list` and `/siri_velocity_aggregation/siri_velocity_aggregation`.
 
-**What is left, and why each one is not just more of the same:**
+`/gtfs_rides_agg/*` also needed `gtfs_rides_agg_by_hour`, which the dump does not contain
+because upstream keeps it as a PostgreSQL materialized view. It is a table here, rebuilt by a
+refreshable view: 53,006,384 rows in 181 MiB, 37 s to build.
 
-- `/route_timetable/list` and `/stop_arrivals/list` fit the existing builder. Both use
-  `skip_order_by`. Straightforward.
-- Five endpoints need a second mechanism, because they are hand-written aggregate SQL rather
-  than filter-and-sort over one table: `/gtfs_agencies/list` (a `GROUP BY` over `gtfs_route`
-  with a fixed sort and no `order_by` parameter at all), `/gtfs_rides_agg/list`,
-  `/gtfs_rides_agg/group_by`, `/rides_execution/list`, and
-  `/siri_velocity_aggregation/siri_velocity_aggregation`.
-- `/siri_ride_stops/list` is registered but needs the two-stage query shape below.
-
-**The real blocker is the sort key, not the row count.** `/siri_ride_stops/list` joins seven
+**The sort key was the real blocker, not the row count.** `/siri_ride_stops/list` joins seven
 tables. A naive translation returns correct rows in 48.8 s, and the cause is not any single
 join:
 
@@ -176,8 +171,11 @@ a rewrite.
 - **PostgreSQL wins one query.** A selective `line_ref` + bounding-box filter is 0.017 s
   against 0.063–0.090 s, because B-tree indexes on `lon`/`lat` are the right tool. Closing it
   needs skip indexes. Not done.
-- **Projections are not in the 163 GiB.** Two of them take the honest total to ~219 GiB.
-  Quote 219, not 163.
+- **Projections are measured now, not predicted, and they cost more than was assumed.**
+  Three of them take the total from 163.22 GiB to **231.82 GiB**: `gtfs_ride_stop.by_ride`
+  29.88 GiB, and two on `siri_ride_stop` — `by_gtfs_stop` 19.31 GiB and `by_siri_ride`
+  18.94 GiB — because that table is filtered by two different foreign keys and sorted by
+  neither. Quote 232 GiB, not 163.
 - **The `siri_ride_stop` projection is predicted, not measured.** The 0.015 s figure above is
   measured on `gtfs_ride_stop`; the second one is inferred from it.
 - **`siri_ride_stop` is now maintained; `gtfs_ride_stop` is not.** The SIRI chain keeps the

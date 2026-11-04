@@ -69,18 +69,24 @@ None of the following was requested. Each is a judgement call, and each could be
 Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md):
 
 - Loaded the full 13,728,053,041-row public dump and measured storage per table and per engine.
-- Wrote the API: 20 of 27 endpoints registered, **13 verified byte-identical** across 22 cases.
+- Wrote the API: **all 27 endpoints, verified byte-identical** across 48 differential tests.
 - Built the continuous SIRI ingest from S3 — three SQL objects, no scheduler.
 - Wrote the CI, the Terraform module, and 35 unit tests on SQL generation.
 - Capped its own work on the machine: 6 of 24 cores, `nice 19`, and ClickHouse's own
   bandwidth and memory ceilings.
 
-**Not done, and material to criterion 1:**
+- Built the enrichment, so SIRI flows from S3 to the API with no scheduler.
+- Read the upstream ETL rather than guessing at it, which is what settled the ride-identity
+  and coordinate-dropping rules, and what turned up the findings in
+  [docs/FINDINGS.md](docs/FINDINGS.md).
 
-- **27 of 27 is not met.** 13 verified, 7 registered but never compared against production,
-  7 not written at all. The agent spent the time on measurement, the repository and the
-  ingest instead; that was its own choice and it left the stated criterion unmet.
-- **The daily GTFS refresh is not built**, so the GTFS tables still age from the dump.
+**Not done:**
+
+- **The daily GTFS refresh is not built**, so the GTFS tables still age from the dump. This is
+  the one piece of the pipeline that is still missing.
+- **No sustained resource measurement.** The figures behind the AWS estimate are per-query and
+  per-hour, not a 24-hour steady state under continuous ingest.
+- **Nothing is deployed.** Stage 5 has not started.
 
 ## Quickstart
 
@@ -126,22 +132,36 @@ Three findings behind them:
 
 ## Where it stands
 
-**13 of the 27 endpoints are verified byte-identical to production**, over 22 differential
-test cases. Not "same status code" — the same JSON.
-
-**The acceptance criterion is 27 of 27, and it is not met.** The 22 cases cover 13
-endpoints only; the other 14 are either unverified or unwritten. See
-[Who decided what](#who-decided-what) for whose call that was.
+**27 of 27 endpoints, and 48 of 48 differential tests pass against production.** Not "same
+status code" — the same JSON, ids included, because inside the comparison window both databases
+hold the same rows under the same ids.
 
 | | |
 | --- | --- |
-| Endpoints matching production | 13 of 27 |
-| Endpoints registered but not yet verified | 7 |
-| Endpoints not written | 7 (five need hand-written aggregate SQL) |
+| Endpoints matching production | **27 of 27** |
+| Differential tests | 48 passing, covering every endpoint in the published spec |
+| Fields excluded from comparison | 2, both with a measured reason |
 | Unit tests on SQL generation | 35, passing, no database required |
-| Lines of API code | 1,105 TypeScript |
+| Lines of API code | 1720 TypeScript |
 
-The acceptance criterion is 27 of 27. [ROADMAP.md](ROADMAP.md) says what is left.
+A coverage test fails if the published spec ever grows an endpoint the suite does not exercise,
+so "27 of 27" cannot quietly become 27 of 28.
+
+**Three things that number does not claim**, stated here rather than in a footnote:
+
+- **`/gtfs_rides_agg/list` has no production baseline.** Production answers it with a statement
+  timeout — measured at 86 s and again at 103 s on a single day — so the case asserts only that
+  this implementation answers. The data behind it is verified through
+  `/gtfs_rides_agg/group_by`, which reads the same aggregate and does answer.
+- **Two fields of `/siri_velocity_aggregation` are excluded.** Its rolling average uses a `ROWS`
+  window over an `ORDER BY` with ties, so the frame depends on physical row order. Three
+  identical calls to this implementation returned three different values, which means production
+  cannot be stable either.
+- **`/stop_arrivals/list` matches by both sides returning nothing.** That is the only contract it
+  can still be held to, and why is in [FINDINGS.md](docs/FINDINGS.md).
+
+The acceptance criterion is met. What remains is not the API —
+[ROADMAP.md](ROADMAP.md) has it.
 
 ### What the contract turned out to be
 
@@ -314,7 +334,11 @@ The directory boundaries are kept clean from day one so that split is mechanical
   which needs a real traffic figure before anyone relies on the ~$96. The estimate itself is
   built from published AWS rates; what the project pays today was reported privately and is
   not in this repository.
-- **Projections are not in the 163 GiB.** Two of them take the honest total to ~219 GiB.
+- **Projections are measured now, not predicted, and they cost more than was assumed.**
+  Three of them take the total from 163.22 GiB to **231.82 GiB**: `gtfs_ride_stop.by_ride`
+  29.88 GiB, and two on `siri_ride_stop` — `by_gtfs_stop` 19.31 GiB and `by_siri_ride`
+  18.94 GiB — because that table is filtered by two different foreign keys and sorted by
+  neither. Quote 232 GiB, not 163.
 - This repository does not answer the questions that actually decide a migration: who
   maintains it, what happens at 3 a.m., and what breaks in a provider move. Those are the
   maintainers' calls, and measurements do not settle them.

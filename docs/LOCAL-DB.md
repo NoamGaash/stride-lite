@@ -122,8 +122,18 @@ reading 3 granules out of 328,980. A `bloom_filter` skip index is the wrong tool
 only reaches 1.22 s — the reasoning and the numbers are in
 [BENCHMARKS.md](BENCHMARKS.md#is-clickhouse-a-bad-fit-because-of-joins-measured-answer-no).
 
-Budget for projections when you quote storage: 163 GiB is the base, two projections take it
-to roughly **219 GiB**.
+Budget for projections when you quote storage. Measured, all three:
+
+| Table | Projection | Size |
+| --- | --- | --- |
+| `gtfs_ride_stop` | `by_ride` | 29.88 GiB |
+| `siri_ride_stop` | `by_gtfs_stop` | 19.31 GiB |
+| `siri_ride_stop` | `by_siri_ride` | 18.94 GiB |
+
+163.22 GiB base plus 68.13 GiB of projections is **231.82 GiB**. `siri_ride_stop` needs two
+because it is filtered by two different foreign keys — `gtfs_stop_id` for `/stop_arrivals/list`
+and `siri_ride_id` for `/siri_ride_stops/list` — and sorted by neither. Each lookup goes from
+44 s to 0.016 s.
 
 ## Route B — one fixture day
 

@@ -4,7 +4,7 @@ Empirical comparison of storage volume for the Stride `siri_vehicle_location` da
 support the databus team's decision on replacing PostgreSQL with a compressed store.
 
 **Status:** volume and latency results complete; the full 13.7-billion-row database is loaded
-locally and 22 of 22 differential cases against production pass across 13 of 27 endpoints.
+locally and 48 of 48 differential cases against production pass across all 27 endpoints.
 **Everything below marked "measured" was run in this environment; anything else is labelled.**
 
 ---
@@ -796,8 +796,9 @@ All in eu-west-1, where the raw archive already lives, so S3 reads are same-regi
 | **Total**                                  | **~$96**                                         |
 
 **300 GB and not 200.** An earlier version of this table said 200 GB, which does not fit: the
-measured database is 163 GiB and the two projections the join-heavy endpoints need add about
-56 GiB, so ~219 GiB is the real requirement before any growth headroom.
+measured database is 163.22 GiB and the three projections the join-heavy endpoints need add
+68.13 GiB — measured since, not predicted — so 231.82 GiB is the real requirement before any
+growth headroom.
 
 One instance and not two: measured peak query memory was ≤25 MB and the API is a stateless
 Node process, so `infra/main.tf` provisions a single box for both. A 1-year reserved rate
@@ -1166,24 +1167,30 @@ two specific things, both nameable and both costed:
    +26 GiB — **predicted from the measured case, not itself measured**.
 
 That second point changes the storage figure materially: the 163 GiB whole-database number
-above does not include projections. Two of them add roughly **56 GiB, taking the total to
-about 219 GiB** — still far below PostgreSQL's 1.34 TB for one table, but the honest number to
-put in front of the team is 219 GiB and not 163 GiB.
+above does not include projections. Three of them add **68.13 GiB, taking the total to
+231.82 GiB** — still far below PostgreSQL's 1.34 TB for one table, but the honest number to
+put in front of the team is 232 GiB and not 163 GiB. `siri_ride_stop` needs two of the three,
+because it is filtered by `gtfs_stop_id` on one endpoint and by `siri_ride_id` on another and
+is sorted by neither.
 
 ### Endpoint coverage
 
-|                                  | Count | State                                          |
-| -------------------------------- | ----- | ---------------------------------------------- |
-| Verified identical to production | 13    | 22 of 22 differential cases pass               |
-| Registered, not yet verified     | 7     | 6 `/get` endpoints and `/siri_ride_stops/list` |
-| Not yet written                  | 7     | see below                                      |
+|                                  | Count | State                                  |
+| -------------------------------- | ----- | -------------------------------------- |
+| Verified identical to production | 27    | 48 of 48 differential cases pass       |
+| From the query builder           | 20    | `api/src/sql.ts`                       |
+| Hand-written aggregate SQL       | 7     | `api/src/raw.ts`                       |
 
-The seven not written split cleanly. Two fit the existing query builder
-(`/route_timetable/list`, `/stop_arrivals/list` — both use `skip_order_by`). Five are
-hand-written SQL upstream and need a second mechanism, because the generic builder cannot
-express them: `/gtfs_agencies/list` (a `GROUP BY` with a fixed `ORDER BY` and no `order_by`
-parameter at all), `/gtfs_rides_agg/list`, `/gtfs_rides_agg/group_by`,
-`/rides_execution/list`, and `/siri_velocity_aggregation/…`.
+The seven that needed a second mechanism are hand-written SQL upstream too, because the
+generic builder cannot express them: `/gtfs_agencies/list` (a `GROUP BY` with a fixed
+`ORDER BY` and no `order_by` parameter at all), `/gtfs_rides_agg/list`,
+`/gtfs_rides_agg/group_by`, `/rides_execution/list`, `/route_timetable/list`,
+`/stop_arrivals/list` and `/siri_velocity_aggregation/…`.
+
+Three of the 48 cases do not compare values, and each says why in the suite rather than being
+quietly dropped: `/gtfs_rides_agg/list`, which production answers with a statement timeout;
+and two fields of `/siri_velocity_aggregation`, which are not reproducible in either
+implementation because a `ROWS` window sits over an `ORDER BY` with ties.
 
 ## 12. Still open
 

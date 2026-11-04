@@ -119,7 +119,18 @@ ALTER TABLE stride.gtfs_ride_stop MATERIALIZE PROJECTION by_ride;
 granules מתוך 328,980. אינדקס דילוג `bloom_filter` הוא הכלי הלא נכון כאן ומגיע רק ל-1.22
 שניות — הנימוק והמספרים ב-[BENCHMARKS.md](BENCHMARKS.md#is-clickhouse-a-bad-fit-because-of-joins-measured-answer-no).
 
-לתקצב projections כשמצטטים אחסון: 163 GiB הם הבסיס, ושני projections מביאים את זה לכ-**219 GiB**.
+לתקצב projections כשמצטטים אחסון. נמדד, כל השלושה:
+
+| טבלה | Projection | גודל |
+| --- | --- | --- |
+| `gtfs_ride_stop` | `by_ride` | 29.88 GiB |
+| `siri_ride_stop` | `by_gtfs_stop` | 19.31 GiB |
+| `siri_ride_stop` | `by_siri_ride` | 18.94 GiB |
+
+163.22 GiB בסיס ועוד 68.13 GiB של projections הם **231.82 GiB**. `siri_ride_stop` צריכה שניים
+כי היא מסוננת לפי שני מפתחות זרים שונים — `gtfs_stop_id` עבור `/stop_arrivals/list` ו-
+`siri_ride_id` עבור `/siri_ride_stops/list` — ואינה ממוינת לפי אף אחד מהם. כל חיפוש יורד
+מ-44 שניות ל-0.016.
 
 ## מסלול ב' — יום fixture אחד
 

@@ -27,9 +27,9 @@ variable "instance_type" {
 }
 
 variable "data_volume_gb" {
-  description = "173 GB measured for siri_vehicle_location plus room to grow."
+  description = "231.82 GiB measured, base plus three projections, and room to grow at +36 GiB a year."
   type        = number
-  default     = 300
+  default     = 400
 }
 
 variable "ssh_cidr" {
