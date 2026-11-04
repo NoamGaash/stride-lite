@@ -1,0 +1,41 @@
+<!-- The server configuration up.sh starts ClickHouse with.
+     Every ceiling here exists because the reference machine is a workstation
+     somebody works on, not a server. All of them were arrived at by measuring
+     what a careless default did: the first full load saturated the NVMe at
+     97.6% utilisation and made the machine unusable.
+     On a dedicated host, raise them or delete this file. -->
+<clickhouse>
+    <logger>
+        <level>warning</level>
+        <log>__STATE__/ch.log</log>
+        <errorlog>__STATE__/ch.err.log</errorlog>
+        <size>100M</size>
+        <count>1</count>
+    </logger>
+    <path>__STATE__/data/</path>
+    <tmp_path>__STATE__/tmp/</tmp_path>
+    <user_files_path>__STATE__/user_files/</user_files_path>
+    <user_directories>
+        <users_xml><path>__STATE__/users.xml</path></users_xml>
+        <local_directory><path>__STATE__/access/</path></local_directory>
+    </user_directories>
+    <listen_host>127.0.0.1</listen_host>
+    <tcp_port>__TCP_PORT__</tcp_port>
+    <http_port>__HTTP_PORT__</http_port>
+
+    <max_server_memory_usage>4294967296</max_server_memory_usage>
+
+    <!-- ionice is ignored on the `none` I/O scheduler that NVMe usually has,
+         and cgroup io.max needs root, so ClickHouse's own throttle is the only
+         limit that actually applies. -->
+    <max_local_read_bandwidth_for_server>83886080</max_local_read_bandwidth_for_server>
+    <max_local_write_bandwidth_for_server>41943040</max_local_write_bandwidth_for_server>
+
+    <!-- Background merges, not queries, were what pinned the disk: one 97 GiB
+         merge scheduled as a single unit. Shrinking background_pool_size
+         instead trips ClickHouse's own consistency checks against several
+         other defaults, and it refuses to start. -->
+    <merge_tree>
+        <max_bytes_to_merge_at_max_space_in_pool>2147483648</max_bytes_to_merge_at_max_space_in_pool>
+    </merge_tree>
+</clickhouse>

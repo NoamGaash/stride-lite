@@ -85,19 +85,22 @@
 - **27 מתוך 27 אינו מתקיים.** 13 אומתו, 7 רשומים אך מעולם לא הושוו מול הפרודקשן, ו-7 לא
   נכתבו בכלל. הסוכן השקיע את הזמן במדידות, בריפו וב-ingest במקום; זו הייתה בחירה שלו, והיא
   השאירה את הקריטריון שהוגדר לא מסופק.
-- **ה-enrichment לא נבנה**, ולכן ה-ingest וה-API אינם מחוברים.
-- **הרענון היומי של GTFS לא נבנה.**
+- **הרענון היומי של GTFS לא נבנה**, ולכן טבלאות ה-GTFS עדיין מתיישנות מהדאמפ.
 
 ## התחלה מהירה
 
 ```bash
-curl https://clickhouse.com/ | sh && ./clickhouse server --daemon
-export CH_CLIENT="./clickhouse client"
-./scripts/apply-schema.sh                                  # 16 טבלאות
-CH_DB=stride ./ingest/backfill.sh 2026 11 03               # יום של SIRI חי מ-S3, כ-2 דקות
-./clickhouse client --database stride --multiquery < ingest/siri.sql   # ingest רציף, בלי scheduler
-cd api && npm ci && CH_DB=stride npm start                 # API על :8080
+./up.sh
 ```
+
+זה הכל. הסקריפט מוריד את הבינארי של ClickHouse, מריץ אותו תחת תקרת זיכרון, הגבלות I/O ושש
+ליבות, יוצר את 16 הטבלאות, מתקין את שרשראות ה-ingest וה-enrichment, טוען שעתיים של SIRI חי
+מ-S3, ומרים את ה-API על :8080. מאותו רגע מסד הנתונים מתעדכן לבדו, בלי scheduler ובלי worker.
+
+`./up.sh 6` טוען שש שעות במקום שעתיים; `./up.sh 0` לא טוען היסטוריה כלל ורק מתקדם קדימה.
+
+תקרות המשאבים יושבות ב-[`ingest/local.xml`](ingest/local.xml), והן שם כי מכונת הייחוס של
+הפרויקט היא תחנת עבודה של מישהו. על שרת ייעודי — להעלות אותן.
 
 בלי Docker, בלי root, בלי credentials — הנתונים ציבוריים.
 
@@ -194,7 +197,7 @@ flowchart TB
     DUMP -->|"scripts/load-from-dump.sh<br/>one-time bootstrap<br/>13.7 b rows"| TYPED
     DUMP --> GTFS
     S3G -.->|"daily GTFS refresh<br/>NOT BUILT"| GTFS
-    RAW -.->|"enrichment<br/>NOT BUILT"| TYPED
+    RAW -->|"ingest/enrich.sql<br/>6 chained refreshable views<br/>976,688 readings in 1.6 s"| TYPED
 
     TYPED --> API["stride-lite API<br/>TypeScript, 20 of 27 endpoints"]
     GTFS --> API
@@ -233,9 +236,8 @@ flowchart TB
 | --- | --- | --- |
 | איסוף SIRI | ה-`open-bus-siri-requester` הקיים, ללא שינוי | אין |
 | ingest של SIRI → טבלה גולמית | ClickHouse `s3()` ועוד materialized view מתרענן | [`ingest/siri.sql`](ingest/siri.sql) — 3 אובייקטים, בלי scheduler |
-| מהגולמי לטבלאות המוקלדות של ה-API | materialized views | **לא נבנה** |
-| ingest של GTFS | shell: curl, unzip, `clickhouse-client` | כ-15 שורות |
-| העשרה (enrichment) | materialized views של ClickHouse | **אין** |
+| מהגולמי לטבלאות המוקלדות של ה-API | 6 views מתרעננים בשרשרת, מסודרים ב-`DEPENDS ON` | [`ingest/enrich.sql`](ingest/enrich.sql) |
+| רענון יומי של GTFS | shell: curl, unzip, `clickhouse-client` | **לא נבנה** |
 | תזמון | `REFRESH EVERY` של ClickHouse | **אין** |
 | ניטור | `system.view_refreshes` | **אין** |
 | API | TypeScript | השירות היחיד |
@@ -251,13 +253,38 @@ view אינקרמנטלי שמתחזק אותה מהנתונים עצמם, וש�
 נמדד מול הארכיון החי: **שעה של snapshots נטענת ב-5-6 שניות, והרצה חוזרת על שעה שכבר נטענה
 כותבת 0 שורות ב-0 שניות.**
 
-**מה שהוא עוד לא עושה:** הוא מנחית שורות ב-`siri_vehicle_location_raw`, שזה הפיד של משרד
-התחבורה כפי שהוא מגיע — כל שדה string, בלי מפתחות זרים.
+**גם ה-enrichment בנוי**, ולכן הצינור שלם מקצה לקצה: ה-API משרת נתונים שהגיעו ל-S3 דקות
+קודם לכן.
 
-ה-`siri_vehicle_location` שה-API משרת הוא מוקלד ומחובר במפתחות שלמים, והוא מגיע היום מהדאמפ.
-הגזירה של השני מהראשון היא ה-enrichment, והיא **לא נבנתה**.
+הפיד נוחת ב-`siri_vehicle_location_raw` כפי שהוא מגיע — כל שדה string, בלי מפתחות זרים —
+ושישה views מתרעננים בשרשרת גוזרים ממנו את הטבלאות המוקלדות שה-API קורא. `DEPENDS ON` הוא
+מה שמסדר אותם, כך שנסיעה לעולם לא מחפשת מסלול שעוד לא קיים.
 
-כלומר לופ ה-ingest אמיתי, והצינור עדיין לא שלם מקצה לקצה.
+נמדד: **שש שעות, 976,688 קריאות, הועשרו ב-1.6 שניות**, והרצה חוזרת כותבת 0 שורות.
+
+ומכיוון שנתונים טריים זורמים עכשיו, ההשוואה הדיפרנציאלית נחלצת מחלון הדאמפ התקוע ויכולה לרוץ
+מול הפרודקשן **על אותה דקה של היום**. על דקה כזאת:
+
+| | |
+| --- | --- |
+| שורות שהוחזרו, פרודקשן מול שלנו | **5,765 מול 5,765** |
+| קריאות שיש לפרודקשן וחסרות לנו | **0** |
+| קריאות שיש לנו ואין לפרודקשן | **0** |
+| זהות בכל שדה של מידע תחב"צ | **5,685 מתוך 5,746 — 98.94%** |
+| נבדלות | 61 שורות, רכב אחד, שדה אחד |
+
+ה-61 נבדלות רק ב-`siri_ride__scheduled_start_time`, כולן ברכב אחד שה-`journey_ref` שלו הוא
+הסנטינל `…-0`. הפרודקשן מדווח זמן יציאה ש**אינו מופיע בשום מקום בשש שעות של הפיד**, ולכן
+הסיבה היא משהו שה-ETL במעלה הזרם עושה ושעדיין לא מובן. זה פתוח, ולא מוסבר בדיעבד.
+
+שני כללים נגזרו מההשוואה הזאת, ושניהם היו שגויים בניסיון הראשון:
+
+- **זהות הנסיעה היא `(siri_route_id, journey_ref, vehicle_ref)` ולא ה-`scheduled_start_time`
+  שלה** — שלושת אלה כבר ייחודיים על פני 123,622 נסיעות ביום אחד מהדאמפ. מפתוח לפי זמן
+  היציאה מפצל נסיעה אחת לכמה בכל פעם שהפיד מתקן אותו: 65 שורות בדקה אחת.
+- **הפרודקשן מסנן קריאות בלי קואורדינטות.** אפס מיקומים ריקים ב-432,143 שורות פרודקשן בשעה,
+  מול 407 ריקים ב-335,227 שורות גולמיות. שמירה שלהן החזירה ארבע קריאות שה-API של הפרודקשן
+  לא מחזיר.
 
 `system.view_refreshes` מדווח `status`, `next_refresh_time`, `written_rows` ו-`exception` —
 בדיוק הנראות שבגללה יש Airflow, בתוך מסד הנתונים.
@@ -274,8 +301,9 @@ view אינקרמנטלי שמתחזק אותה מהנתונים עצמם, וש�
 ## מבנה
 
 ```
+up.sh             פקודה אחת: בינארי, שרת, סכמה, ingest, enrichment, API
 db/schema.sql     16 הטבלאות, כפי שנשלפו מהמסד הרץ
-ingest/           siri.sql (רציף, 3 אובייקטים), backfill.sh (היסטוריה)
+ingest/           siri.sql (ingest), enrich.sql (שרשרת 6 צעדים), backfill.sh, local.xml
 api/              שירות TypeScript — src/{sql,registry,server,ch}.ts
 infra/main.tf     מודול Terraform
 scripts/          apply-schema.sh, load-from-dump.sh
@@ -288,8 +316,10 @@ docs/             BENCHMARKS.md (הדוח המלא), LOCAL-DB.md
 
 ## הסתייגויות, בכוונה בגוף ה-README
 
-- **ה-ingest וה-API עוד לא מחוברים.** נתונים חדשים נוחתים בטבלה גולמית; ה-API קורא
-  מטבלאות מוקלדות שנטענו מהדאמפ. ה-enrichment שביניהם לא נבנה.
+- **טבלאות ה-GTFS עדיין קפואות בדאמפ.** SIRI זורם מקצה לקצה; הרענון היומי מ-`gtfs_archive/`
+  לא נבנה, ולכן מסלולים ותחנות מתיישנים.
+- **61 שורות בדקה שנמדדה עדיין נבדלות** מהפרודקשן ב-`siri_ride__scheduled_start_time`, ברכב
+  אחד עם journey ref מסוג סנטינל, והסיבה אינה מובנת.
 - הגיבוי הציבורי הוא **בן 4.6 חודשים** — `Last-Modified: 2026-06-14`, והנתונים בתוכו
   נגמרים ב-29/05/2026. כל מקרה בדיקה דיפרנציאלי חייב להישאר בתוך החלון הזה, וזו האילוצה
   הגדולה ביותר על העבודה.

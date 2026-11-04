@@ -80,21 +80,23 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
 - **27 of 27 is not met.** 13 verified, 7 registered but never compared against production,
   7 not written at all. The agent spent the time on measurement, the repository and the
   ingest instead; that was its own choice and it left the stated criterion unmet.
-- **The enrichment is not built**, so the ingest and the API are not joined up.
-- **The daily GTFS refresh is not built.**
+- **The daily GTFS refresh is not built**, so the GTFS tables still age from the dump.
 
 ## Quickstart
 
 ```bash
-curl https://clickhouse.com/ | sh && ./clickhouse server --daemon
-export CH_CLIENT="./clickhouse client"
-./scripts/apply-schema.sh                                  # 16 tables
-CH_DB=stride ./ingest/backfill.sh 2026 11 03               # a day of live SIRI from S3, ~2 min
-./clickhouse client --database stride --multiquery < ingest/siri.sql   # continuous ingest, no scheduler
-cd api && npm ci && CH_DB=stride npm start                 # API on :8080
+./up.sh
 ```
 
-No Docker, no root, no credentials — the data is public. The full reproduction, including the
+That is the whole thing. It fetches the ClickHouse binary, starts it under a memory ceiling,
+I/O limits and six cores, creates the 16 tables, installs the ingest and enrichment chains,
+backfills two hours of live SIRI from S3, and starts the API on :8080. From that moment the
+database keeps itself current with no scheduler and no worker. `./up.sh 6` backfills six
+hours instead; `./up.sh 0` backfills nothing and only moves forward.
+
+No Docker, no root, no credentials — the data is public. The resource ceilings are in
+[`ingest/local.xml`](ingest/local.xml) and exist because the reference machine for this
+project is somebody's workstation; on a dedicated host, raise them. The full reproduction, including the
 13.7-billion-row dump, is in [docs/LOCAL-DB.md](docs/LOCAL-DB.md); cost and cloud resources
 are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
@@ -182,7 +184,7 @@ flowchart TB
     DUMP -->|"scripts/load-from-dump.sh<br/>one-time bootstrap<br/>13.7 b rows"| TYPED
     DUMP --> GTFS
     S3G -.->|"daily GTFS refresh<br/>NOT BUILT"| GTFS
-    RAW -.->|"enrichment<br/>NOT BUILT"| TYPED
+    RAW -->|"ingest/enrich.sql<br/>6 chained refreshable views<br/>976,688 readings in 1.6 s"| TYPED
 
     TYPED --> API["stride-lite API<br/>TypeScript, 20 of 27 endpoints"]
     GTFS --> API
@@ -219,9 +221,8 @@ All three paths were checked against S3 on 2026-11-04: the dump still answers
 | --- | --- | --- |
 | SIRI collection | the existing `open-bus-siri-requester`, unchanged | none |
 | SIRI ingest → raw table | ClickHouse `s3()` + refreshable materialized view | [`ingest/siri.sql`](ingest/siri.sql) — 3 objects, no scheduler |
-| raw → the API's typed tables | ClickHouse materialized views | **not built** |
-| GTFS ingest | shell: curl, unzip, `clickhouse-client` | ~15 lines |
-| Enrichment | ClickHouse materialized views | **none** |
+| raw → the API's typed tables | 6 chained refreshable views, ordered by `DEPENDS ON` | [`ingest/enrich.sql`](ingest/enrich.sql) |
+| GTFS daily refresh | shell: curl, unzip, `clickhouse-client` | **not built** |
 | Scheduling | ClickHouse `REFRESH EVERY` | **none** |
 | Monitoring | `system.view_refreshes` | **none** |
 | API | TypeScript | the only service |
@@ -235,11 +236,38 @@ itself, and two refreshable views that read S3 and skip what is already in. Meas
 the live archive: **one hour of snapshots ingests in 5–6 s, and re-running an already-loaded
 hour writes 0 rows in 0 s.**
 
-**What it does not yet do:** it lands rows in `siri_vehicle_location_raw`, which is the MOT
-feed as it arrives — every field a string, no foreign keys. The API's `siri_vehicle_location`
-is typed and joined by integer id, and today it comes from the dump. Deriving the second from
-the first is the enrichment, and that is **not built**, so the ingest loop is real but the
-pipeline is not yet end to end.
+**The enrichment is built too**, so the pipeline is end to end: the API serves data that
+reached S3 minutes earlier. The feed lands in `siri_vehicle_location_raw` as it arrives —
+every field a string, no foreign keys — and six chained refreshable views derive the typed,
+integer-keyed tables the API reads. `DEPENDS ON` is what orders them, so a ride is never
+looked up before the route it hangs off exists. Measured: **six hours, 976,688 readings,
+enriched in 1.6 s**, and re-running writes 0 rows.
+
+Because fresh data now flows, the differential test escapes the stale dump's window and can
+run against production **for the same minute of today**. On one such minute:
+
+| | |
+| --- | --- |
+| Rows returned, production vs ours | **5,765 vs 5,765** |
+| Readings production has that we lack | **0** |
+| Readings we have that production lacks | **0** |
+| Identical on every transit-data field | **5,685 of 5,746 — 98.94%** |
+| Differing | 61 rows, one vehicle, one field |
+
+The 61 differ only in `siri_ride__scheduled_start_time`, all for one vehicle whose
+`journey_ref` is the sentinel `…-0`. Production reports a departure time that **does not
+appear anywhere in six hours of the feed**, so the cause is something the upstream ETL does
+and is not yet understood. It is open, not explained away.
+
+Two rules fell out of that comparison, and both were wrong in the first attempt:
+
+- **A ride's identity is `(siri_route_id, journey_ref, vehicle_ref)` and not its
+  `scheduled_start_time`** — those three are already unique over 123,622 rides in a day of
+  the dump. Keying on the departure time splits one ride into several whenever the feed
+  revises it: 65 rows in a single minute.
+- **Production drops readings with no coordinates.** Zero NULL locations in 432,143
+  production rows for an hour, against 407 empty ones in 335,227 raw rows. Keeping them
+  returned four readings the production API does not.
 
 `system.view_refreshes` reports `status`, `next_refresh_time`,
 `written_rows` and `exception` — the visibility Airflow is there to provide, inside the
@@ -256,8 +284,9 @@ is argued in [ROADMAP.md](ROADMAP.md).
 ## Layout
 
 ```
+up.sh             one command: binary, server, schema, ingest, enrichment, API
 db/schema.sql     the 16 tables, dumped from the running instance
-ingest/           siri.sql (continuous, 3 objects), backfill.sh (history)
+ingest/           siri.sql (ingest), enrich.sql (6-step chain), backfill.sh, local.xml
 api/              TypeScript service — src/{sql,registry,server,ch}.ts
 infra/main.tf     Terraform module
 scripts/          apply-schema.sh, load-from-dump.sh
@@ -270,8 +299,11 @@ The directory boundaries are kept clean from day one so that split is mechanical
 
 ## Honest caveats
 
-- **The ingest and the API are not joined up yet.** New data lands in a raw table; the API
-  reads typed tables loaded from the dump. The enrichment between them is unbuilt.
+- **The GTFS tables are still frozen at the dump.** SIRI flows end to end; the daily GTFS
+  refresh from `gtfs_archive/` is not built, so routes and stops age.
+- **61 rows in a measured minute still differ** from production in
+  `siri_ride__scheduled_start_time`, for one vehicle with a sentinel journey ref, and the
+  cause is not understood.
 - The public dump is **4.6 months old** — `Last-Modified: 2026-06-14`, data ending
   2026-05-29. Every differential test case has to stay inside that window, which is the
   single biggest constraint on this work.
