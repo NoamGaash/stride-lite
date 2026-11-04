@@ -260,8 +260,12 @@ hour writes 0 rows in 0 s.**
 reached S3 minutes earlier. The feed lands in `siri_vehicle_location_raw` as it arrives —
 every field a string, no foreign keys — and six chained refreshable views derive the typed,
 integer-keyed tables the API reads. `DEPENDS ON` is what orders them, so a ride is never
-looked up before the route it hangs off exists. Measured: **six hours, 976,688 readings,
-enriched in 1.6 s**, and re-running writes 0 rows.
+looked up before the route it hangs off exists.
+
+Measured **on the full 13.7-billion-row database**, not on a scratch one: a cycle took 21 new
+snapshots through all six steps by itself — 10 routes, 3 stops, 2,687 rides, 67,796 ride stops
+and 167,980 vehicle locations, no exceptions — and the ids continue production's own sequences
+rather than starting over. A cycle with nothing new costs about 1.4 s.
 
 Because fresh data now flows, the differential test escapes the stale dump's window and can
 run against production **for the same minute of today**. On one such minute:
