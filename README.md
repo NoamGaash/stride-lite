@@ -1,6 +1,6 @@
 # stride-lite
 
-[עברית](README.he.md) · **[Cost, performance, tradeoffs](docs/DEPLOYMENT.md)** · [Roadmap](ROADMAP.md) · [Measurements](docs/BENCHMARKS.md) · [Run it locally](docs/LOCAL-DB.md)
+[עברית](README.he.md) · **[Who decided what](#who-decided-what)** · [Cost, performance, tradeoffs](docs/DEPLOYMENT.md) · [Roadmap](ROADMAP.md) · [Measurements](docs/BENCHMARKS.md) · [Run it locally](docs/LOCAL-DB.md)
 
 A from-scratch reimplementation of the [Open Bus Stride](https://github.com/hasadna/open-bus-stride-api)
 backend on ClickHouse. Same API contract, byte for byte; a fraction of the storage; no
@@ -14,6 +14,74 @@ look like if it were built today?**
 > [@NoamGaash](https://github.com/NoamGaash). Every number below was measured in a session
 > and is reproducible by the instructions in [docs/LOCAL-DB.md](docs/LOCAL-DB.md); nothing
 > here is quoted from memory.
+
+## Who decided what
+
+This repository is one person's brief and an AI agent's execution of it. Those are not the
+same thing, and a reader deciding whether to trust a number here needs to know which is
+which. Three lists follow: what was asked for, what the agent chose on its own, and what it
+actually did.
+
+### What [@NoamGaash](https://github.com/NoamGaash) asked for
+
+**The goal.** Rebuild the Open Bus Stride backend from scratch on ClickHouse, run it locally,
+measure what it really costs in resources, price it on AWS, and — if it comes in under
+**$150/month** — propose it as a replacement for the current Kamatera infrastructure.
+
+**Definition of done.** An API serving data from a local database and returning the same
+results as production.
+
+**Three acceptance criteria**, stated as conditions and not aspirations:
+
+1. **Every API endpoint preserves its behaviour**, proven by comparison against production.
+2. **A simple implementation.** No complexity beyond what the problem requires.
+3. **Modern infrastructure**: test coverage, infrastructure as code, CI/CD on GitHub Actions.
+
+**Constraints added along the way**, each of which changed the work:
+
+| Constraint | What it ruled out |
+| --- | --- |
+| Public-transport data must be **byte-for-byte identical**; our own internal ids may change | Settles the id question below — surrogate keys are ours to choose, MOT data is not |
+| **Plug and play** — one command, not a mechanism to operate | Multi-step bring-up instructions as the final answer |
+| **Do not load the machine.** It is a volunteer's workstation and their livelihood runs on it | Any default that assumes a dedicated server |
+| **Do not over-simplify if it costs performance.** "Simple" is not a licence to be slow | Dropping indexes, projections or denormalisation to shorten the code |
+| What the project pays today is **private**; estimates from public rates are fine | Any comparison quoting the real invoice |
+| A **public repository**, no secrets, Hebrew and English documentation | — |
+| **AI agents must identify themselves** when acting in the project (the repo's own rule) | — |
+
+### What the agent interpreted, chose, or assumed
+
+None of the following was requested. Each is a judgement call, and each could be wrong.
+
+| Decision | Why | What would overturn it |
+| --- | --- | --- |
+| **ClickHouse**, single node | The workload is append-only analytics over one wide fact table | A write pattern needing real transactions |
+| **"Same results" read as byte-identical JSON**, not matching status codes | A weaker reading makes criterion 1 untestable | — |
+| **TypeScript** for the API | The generated client and the frontend are already TypeScript | — |
+| **Refreshable materialized views as the scheduler** | `system.view_refreshes` already reports what Airflow is deployed to report | Work that genuinely needs a DAG, not a cadence |
+| **No dbt, scheduler, queue, cache or ORM** | Criterion 2 — each would have to earn its place | A measurement showing one is needed |
+| **Terraform**, as a module beside `hasadna-iac`'s existing ones | Continuation rather than a parallel toolchain | — |
+| **The stale dump's window is the test boundary** | Every differential case must sit inside it or fail for a reason that is not a bug | Fresh data, which needs the unbuilt enrichment |
+| **`m7g.large` + 300 GB gp3** for the estimate | Peak measured query memory was ≤25 MB, so 8 GB is not optimistic | A sustained measurement under continuous ingest, which has not been run |
+
+### What the agent actually did
+
+Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md):
+
+- Loaded the full 13,728,053,041-row public dump and measured storage per table and per engine.
+- Wrote the API: 20 of 27 endpoints registered, **13 verified byte-identical** across 22 cases.
+- Built the continuous SIRI ingest from S3 — three SQL objects, no scheduler.
+- Wrote the CI, the Terraform module, and 35 unit tests on SQL generation.
+- Capped its own work on the machine: 6 of 24 cores, `nice 19`, and ClickHouse's own
+  bandwidth and memory ceilings.
+
+**Not done, and material to criterion 1:**
+
+- **27 of 27 is not met.** 13 verified, 7 registered but never compared against production,
+  7 not written at all. The agent spent the time on measurement, the repository and the
+  ingest instead; that was its own choice and it left the stated criterion unmet.
+- **The enrichment is not built**, so the ingest and the API are not joined up.
+- **The daily GTFS refresh is not built.**
 
 ## Quickstart
 
@@ -56,8 +124,12 @@ Three findings behind them:
 
 ## Where it stands
 
-**22 of 22 differential test cases across 13 endpoints are byte-identical to production.**
-Not "same status code" — the same JSON.
+**13 of the 27 endpoints are verified byte-identical to production**, over 22 differential
+test cases. Not "same status code" — the same JSON.
+
+**The acceptance criterion is 27 of 27, and it is not met.** The 22 cases cover 13
+endpoints only; the other 14 are either unverified or unwritten. See
+[Who decided what](#who-decided-what) for whose call that was.
 
 | | |
 | --- | --- |
