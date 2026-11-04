@@ -21,10 +21,28 @@ Five questions, answered with what was measured. Anything not measured is labell
 
 Reserve the instance for a year and it drops to roughly $45, putting the total near **$84**.
 
-**Why 400 GB:** the database measured **163.22 GiB**, and the three projections the
-join-heavy endpoints need add **68.13 GiB** — measured, not predicted — so **231.82 GiB** is the
-real requirement. 300 GB would leave about 1.3 years of growth at the measured +36 GiB/year,
-which is too tight to commit to; 400 GB leaves about four years for $9 more a month.
+**Why 400 GB.** Measured on the loaded database, with every projection built:
+
+| | Size |
+| --- | --- |
+| Base tables, all 16 | **163.98 GiB** |
+| `gtfs_ride_stop.by_ride` | 29.88 GiB |
+| `siri_ride_stop.by_gtfs_stop` | 19.33 GiB |
+| `siri_ride_stop.by_siri_ride` | 18.95 GiB |
+| `siri_ride.by_natural_key` | 0.87 GiB |
+| **Total** | **233.02 GiB** |
+
+Projections are **30% of the footprint**, which is worth knowing before sizing a disk around
+the 164 GiB that the data alone occupies.
+
+**One of them can go.** `siri_ride_stop.by_gtfs_stop` exists only to make `/stop_arrivals/list`
+fast, and that endpoint cannot return a row from production for any input — see
+[FINDINGS.md](FINDINGS.md). Dropping it saves **19.33 GiB** and costs nothing anyone can
+observe, taking the requirement to **213.69 GiB**.
+
+EBS volumes grow online and never shrink, so there is no reason to buy the headroom up front.
+250 GB fits the reduced footprint; 400 GB buys roughly four years at the measured +36 GiB/year
+of base growth.
 
 **Why one instance and not two:** ClickHouse's measured peak query memory was **≤25 MB** and
 the API is a stateless Node process. They fit on one box with room to spare. `infra/main.tf`
@@ -38,6 +56,69 @@ Two honest caveats:
   traffic figure, which Cloudflare analytics would give. Everything else here is bounded.
 
 What the project pays today is not in this repository — that figure was reported privately.
+
+### If the server is not on all the time
+
+A different question with a different answer, and the answer is counter-intuitive: **the disk
+is the bill and the compute is a rounding error.**
+
+Stopping an EC2 instance stops the compute charge. Everything attached keeps billing. For a
+server woken for about five hours a week — say a weekly working session — that is roughly
+21.7 hours of compute a month:
+
+| | Monthly |
+| --- | --- |
+| EBS `gp3` 250 GB, billed whether the instance runs or not | ~$22 |
+| EBS `gp3` root, 20 GB | ~$2 |
+| Public IPv4, billed even while the instance is stopped | ~$3.6 |
+| EC2 `m7g.large`, 21.7 h | **~$2** |
+| **Total** | **~$30** |
+
+Two things follow.
+
+**Size the instance up, not down.** Compute is under 7% of that bill. An `m7g.xlarge` with
+four cores costs about $4 a month instead of $2 and halves every wait. Choosing a small
+instance to save money saves nothing here.
+
+**The public IPv4 is avoidable.** `infra/main.tf` already attaches an SSM role, so the instance
+can be reached without one, for $3.6 less a month.
+
+**Can five hours absorb a week of missed data?** Measured, ingest and enrichment together:
+**14.7 s per hour of feed** — 9.8 s to pull the snapshots from S3 and 4.9 s to derive the typed
+rows. A week is 168 hours of feed, so **about 41 minutes** on six throttled cores. Even
+assuming an `m7g.large` is three times slower, that is two hours of a five-hour window, and
+half of that on an `m7g.xlarge`.
+
+### Keeping the history somewhere cheaper
+
+If all of it must be present — which it must, for this to be the same API — there are three
+shapes, and only one of them suits an intermittent server:
+
+| | Storage, 233 GiB | Cost of a session |
+| --- | --- | --- |
+| **EBS, always provisioned** | ~$21 at $0.088/GB-mo | none; full speed |
+| **ClickHouse reading S3 directly** | ~$5.6 at $0.024/GB-mo | every cold read is an HTTP GET, and a fresh instance has an empty cache |
+| **S3 cold, restored to EBS per session** | ~$5.6 plus EBS while running | 30–60 minutes of the session, every session |
+| **Tiered: recent on EBS, history on S3** | ~$9–12 | recent queries full speed, history slower |
+
+Tiered storage is what ClickHouse is built for and the only one of these that keeps a
+five-hour session useful while cutting the bill roughly in half. EBS **snapshots** look like
+the obvious answer and are not: a volume restored from a snapshot loads its blocks lazily from
+S3, so the first reads are slow exactly when they are needed, and Fast Snapshot Restore costs
+far more than the storage it saves.
+
+### Getting 233 GiB onto the machine in the first place
+
+Loading the public dump on the instance takes **about 14 hours on six cores**, measured here,
+and an `m7g.large` has two — so a day or more. That is cheap rather than slow in the sense
+that matters: **the instance type is decoupled from the volume.** Rent a 32-core `c7g.8xlarge`
+for the load alone, which should be a few hours and a few dollars, then stop it and bring the
+same volume up under an `m7g.large`.
+
+Faster still, if the uplink allows it: `BACKUP DATABASE … TO S3(…)` here and `RESTORE` there
+copies a built database instead of re-parsing 13.7 billion rows, and skips rebuilding the four
+projections. 233 GiB is about 33 minutes at 1 Gbps and about 5.5 hours at 100 Mbps. Transfer
+into S3 is free.
 
 ---
 
@@ -154,7 +235,8 @@ Ordered by how much they buy.
 
 | Tradeoff | Gain | Cost |
 | --- | --- | --- |
-| **Add the three projections** | a foreign-key lookup on `siri_ride_stop` 44 s → 0.016 s | +68.13 GiB (163.22 → 231.82 GiB), ~25 min to build each under the local I/O cap |
+| **Add the four projections** | a foreign-key lookup on `siri_ride_stop` 44 s → 0.016 s, and the enrichment's ride lookup 6.83 GiB → 0.079 s | +69.04 GiB (163.98 → 233.02 GiB), ~25 min to build each under the local I/O cap |
+| **Skip `by_gtfs_stop`** | −19.33 GiB, about $1.70/month of gp3 | nothing: the endpoint it serves cannot return a row from production |
 | **Sort `siri_vehicle_location` by `vehicle_ref`** | 163 GiB → ~72 GiB, 2.2× smaller | per-vehicle queries win, time-range queries lose; the current sort is the safer default |
 | **Refresh every 5 min instead of 1** | 5× fewer S3 list calls | data up to 5 min stale instead of 1 |
 | **Drop the `previous`-hour view** | one object fewer | a missed refresh silently loses an hour until someone backfills |
@@ -185,7 +267,8 @@ Honest status, so nobody deploys this expecting a finished system:
 - **61 rows in a measured minute differ from production** in `scheduled_start_time`, for one
   vehicle with a sentinel journey ref. Cause not understood.
 - **The `siri_ride_stop` projection is predicted, not measured.**
-- **Resource figures under continuous ingest plus refresh have not been measured** for a
-  sustained period. The ingest numbers above are per-hour, not a 24-hour steady state.
+- **Catch-up throughput is measured; a 24-hour steady state is not.** Ingest and enrichment
+  together cost 14.7 s per hour of feed, so a week of missed data takes about 41 minutes. RSS
+  and CPU held over a full day of continuous running are still unmeasured.
 
 [ROADMAP.md](../ROADMAP.md) tracks all of it.

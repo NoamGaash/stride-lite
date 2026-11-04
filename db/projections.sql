@@ -6,13 +6,16 @@
 --
 -- They are not free. Measured on the full dump:
 --
---   base tables                            163.22 GiB
+--   base tables                            163.98 GiB
 --   gtfs_ride_stop.by_ride                  29.88 GiB
---   siri_ride_stop.by_gtfs_stop             19.31 GiB
---   siri_ride_stop.by_siri_ride             18.94 GiB
---   siri_ride.by_natural_key               758.30 MiB
+--   siri_ride_stop.by_gtfs_stop             19.33 GiB
+--   siri_ride_stop.by_siri_ride             18.95 GiB
+--   siri_ride.by_natural_key                 0.87 GiB
 --   ------------------------------------------------
---   total                                  232.57 GiB
+--   total                                  233.02 GiB
+--
+-- by_gtfs_stop is the one you can leave out: it serves only /stop_arrivals/list,
+-- which cannot return a row from production for any input. See docs/FINDINGS.md.
 --
 -- Building them is I/O bound: about 25 minutes each under the local 40 MB/s
 -- write cap in ingest/local.xml, and far less on an unthrottled disk.

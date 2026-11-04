@@ -84,10 +84,15 @@ Measured today, same parameters against both:
 
 | Endpoint | Production | This implementation |
 | --- | --- | --- |
-| `/gtfs_rides_agg/list`, one day | **statement timeout at 86 s** | 0.040 s |
+| `/gtfs_rides_agg/list`, one day | **statement timeout at 86 s, 103 s and 63 s** | 0.040 s |
 | `/stop_arrivals/list`, no filter | **statement timeout** | — |
 | `/gtfs_agencies/list`, one day | 19.0 s | 0.011 s |
 | `/gtfs_rides/list`, date range | statement timeout at 64 s | 1.2 s |
+
+The three figures for `/gtfs_rides_agg/list` are three separate attempts, and the last was made
+with a **600-second client timeout** to rule out the obvious explanation. It is not the client
+giving up: the body carries PostgreSQL's own `canceling statement due to statement timeout`,
+and prints the query it cancelled. The time varies with load; the outcome does not.
 
 `/gtfs_agencies/list` answers, but 19 s for a `GROUP BY` over one day of
 `gtfs_route` is a user-visible cost for something a column store does in
@@ -105,6 +110,14 @@ Measured on this implementation, which has the same shape: three identical
 calls returned three different values for `stddev_rolling_avg`. The same must be
 true in production. Anything consuming those two fields is consuming noise at the
 third decimal.
+
+**Narrowing the window does not fix it**, which is worth stating because it is the
+first thing anyone tries. On a single hour of an old day inside a 0.01° box, three identical
+calls still disagreed. The structure of why: that window holds 35 groups of rows sharing a
+cell and a timestamp, and **4 of them carry more than one distinct velocity**. A tie whose
+rows are identical is harmless — reordering identical values changes nothing — so it takes
+only those four to move the result, and the cells without them returned the same value every
+time. Determinism here is per cell, not per query.
 
 A deterministic version needs a tiebreaker in the window's `ORDER BY`, or a
 `RANGE` frame instead of `ROWS`.

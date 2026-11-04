@@ -171,11 +171,13 @@ a rewrite.
 - **PostgreSQL wins one query.** A selective `line_ref` + bounding-box filter is 0.017 s
   against 0.063–0.090 s, because B-tree indexes on `lon`/`lat` are the right tool. Closing it
   needs skip indexes. Not done.
-- **Projections are measured now, not predicted, and they cost more than was assumed.**
-  Three of them take the total from 163.22 GiB to **231.82 GiB**: `gtfs_ride_stop.by_ride`
-  29.88 GiB, and two on `siri_ride_stop` — `by_gtfs_stop` 19.31 GiB and `by_siri_ride`
-  18.94 GiB — because that table is filtered by two different foreign keys and sorted by
-  neither. Quote 232 GiB, not 163.
+- **Projections are 30% of the footprint, measured.** Four of them take the total from
+  163.98 GiB to **233.02 GiB**: `gtfs_ride_stop.by_ride` 29.88 GiB, `siri_ride_stop.by_gtfs_stop`
+  19.33 GiB, `siri_ride_stop.by_siri_ride` 18.95 GiB and `siri_ride.by_natural_key` 0.87 GiB.
+  `siri_ride_stop` needs two because it is filtered by a different foreign key on each of two
+  endpoints and sorted by neither. Quote 233 GiB, not 164. One of the four,
+  `by_gtfs_stop`, is droppable: it serves only `/stop_arrivals/list`, which cannot return a row
+  from production at all.
 - **The `siri_ride_stop` projection is predicted, not measured.** The 0.015 s figure above is
   measured on `gtfs_ride_stop`; the second one is inferred from it.
 - **`siri_ride_stop` is now maintained; `gtfs_ride_stop` is not.** The SIRI chain keeps the

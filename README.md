@@ -62,7 +62,7 @@ None of the following was requested. Each is a judgement call, and each could be
 | **No dbt, scheduler, queue, cache or ORM** | Criterion 2 — each would have to earn its place | A measurement showing one is needed |
 | **Terraform**, as a module beside `hasadna-iac`'s existing ones | Continuation rather than a parallel toolchain | — |
 | **The stale dump's window is the test boundary** | Every differential case must sit inside it or fail for a reason that is not a bug | Fresh data, which needs the unbuilt enrichment |
-| **`m7g.large` + 300 GB gp3** for the estimate | Peak measured query memory was ≤25 MB, so 8 GB is not optimistic | A sustained measurement under continuous ingest, which has not been run |
+| **`m7g.large` + 250–400 GB gp3** for the estimate | Peak measured query memory was ≤25 MB, so 8 GB is not optimistic; the disk, not the instance, is what the bill turns on | A 24-hour steady-state measurement, which has not been run |
 
 ### What the agent actually did
 
@@ -84,8 +84,10 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
 
 - **The daily GTFS refresh is not built**, so the GTFS tables still age from the dump. This is
   the one piece of the pipeline that is still missing.
-- **No sustained resource measurement.** The figures behind the AWS estimate are per-query and
-  per-hour, not a 24-hour steady state under continuous ingest.
+- **Throughput under catch-up is measured; a 24-hour steady state is not.** Ingest and
+  enrichment together cost **14.7 s per hour of feed** — 9.8 s to pull the snapshots and 4.9 s
+  to derive the typed rows — so a week of missed data takes about 41 minutes on six throttled
+  cores. What is still unmeasured is RSS and CPU held over a full day of continuous running.
 - **Nothing is deployed.** Stage 5 has not started.
 
 ## Quickstart
@@ -114,7 +116,7 @@ loaded and counted, not extrapolated.
 | | PostgreSQL today | ClickHouse |
 | --- | --- | --- |
 | `siri_vehicle_location` (6.5 billion rows) | **1.34 TB** | **111.52 GiB** |
-| The entire database | ~692 GiB of data + ~760 GB of indexes | **163.22 GiB** |
+| The entire database | ~692 GiB of data + ~760 GB of indexes | **163.98 GiB**, or 233.02 GiB with every projection |
 | Growth per year | +307 GB | **+36 GB** |
 | Estimated AWS bill | — | **~$96/month** |
 
@@ -360,11 +362,13 @@ The directory boundaries are kept clean from day one so that split is mechanical
   which needs a real traffic figure before anyone relies on the ~$96. The estimate itself is
   built from published AWS rates; what the project pays today was reported privately and is
   not in this repository.
-- **Projections are measured now, not predicted, and they cost more than was assumed.**
-  Three of them take the total from 163.22 GiB to **231.82 GiB**: `gtfs_ride_stop.by_ride`
-  29.88 GiB, and two on `siri_ride_stop` — `by_gtfs_stop` 19.31 GiB and `by_siri_ride`
-  18.94 GiB — because that table is filtered by two different foreign keys and sorted by
-  neither. Quote 232 GiB, not 163.
+- **Projections are 30% of the footprint, measured.** Four of them take the total from
+  163.98 GiB to **233.02 GiB**: `gtfs_ride_stop.by_ride` 29.88 GiB, `siri_ride_stop.by_gtfs_stop`
+  19.33 GiB, `siri_ride_stop.by_siri_ride` 18.95 GiB and `siri_ride.by_natural_key` 0.87 GiB.
+  `siri_ride_stop` needs two because it is filtered by a different foreign key on each of two
+  endpoints and sorted by neither. Quote 233 GiB, not 164. One of the four,
+  `by_gtfs_stop`, is droppable: it serves only `/stop_arrivals/list`, which cannot return a row
+  from production at all.
 - This repository does not answer the questions that actually decide a migration: who
   maintains it, what happens at 3 a.m., and what breaks in a provider move. Those are the
   maintainers' calls, and measurements do not settle them.

@@ -102,6 +102,9 @@ GROUP BY table ORDER BY sum(data_compressed_bytes) DESC;
 | 7 טבלאות קטנות יותר | 60,113 | פחות מ-1 MiB |
 | **סך הכל** | **13,728,053,041** | **163.22 GiB** |
 
+זה הדאמפ כפי שנטען, לפני כל projection. ה-ingest הרציף מוסיף לזה משם, וה-projections שלמטה
+מתווספים שוב מעל.
+
 להריץ `OPTIMIZE TABLE … FINAL` לפני שסומכים על נתון גודל, אחרת מיזוגים שלא התיישבו מנפחים אותו.
 
 ### שני projections, אם רוצים שה-endpoints כבדי ה-join יהיו מהירים
@@ -121,16 +124,22 @@ granules מתוך 328,980. אינדקס דילוג `bloom_filter` הוא הכל�
 
 לתקצב projections כשמצטטים אחסון. נמדד, כל השלושה:
 
-| טבלה | Projection | גודל |
-| --- | --- | --- |
-| `gtfs_ride_stop` | `by_ride` | 29.88 GiB |
-| `siri_ride_stop` | `by_gtfs_stop` | 19.31 GiB |
-| `siri_ride_stop` | `by_siri_ride` | 18.94 GiB |
+| טבלה | Projection | גודל | מי צריך אותו |
+| --- | --- | --- | --- |
+| `gtfs_ride_stop` | `by_ride` | 29.88 GiB | endpoints כבדי join |
+| `siri_ride_stop` | `by_gtfs_stop` | 19.33 GiB | `/stop_arrivals/list` |
+| `siri_ride_stop` | `by_siri_ride` | 18.95 GiB | `/siri_ride_stops/list` |
+| `siri_ride` | `by_natural_key` | 0.87 GiB | חיפוש הנסיעה ב-enrichment |
 
-163.22 GiB בסיס ועוד 68.13 GiB של projections הם **231.82 GiB**. `siri_ride_stop` צריכה שניים
-כי היא מסוננת לפי שני מפתחות זרים שונים — `gtfs_stop_id` עבור `/stop_arrivals/list` ו-
-`siri_ride_id` עבור `/siri_ride_stops/list` — ואינה ממוינת לפי אף אחד מהם. כל חיפוש יורד
-מ-44 שניות ל-0.016.
+163.98 GiB בסיס ועוד 69.04 GiB של projections הם **233.02 GiB** — ה-projections הם 30% מזה.
+`siri_ride_stop` צריכה שניים כי היא מסוננת לפי מפתח זר אחר בכל אחד משני endpoints ואינה ממוינת
+לפי אף אחד; כל חיפוש יורד מ-44 שניות ל-0.016. `siri_ride` צריכה אחד כי ה-enrichment שואל
+"אילו מהנסיעות האלה כבר קיימות" בכל רענון, ובלעדיו השאלה הזאת בונה set של 6.83 GiB.
+
+`by_gtfs_stop` הוא זה שאפשר לדלג עליו. הוא משרת רק את `/stop_arrivals/list`, שאינו יכול
+להחזיר שורה מהפרודקשן לשום קלט — ראו [FINDINGS.he.md](FINDINGS.he.md) — אז ויתור עליו חוסך
+19.33 GiB ואינו משנה דבר שניתן להבחין בו. כל הארבעה נמצאים ב-
+[`db/projections.sql`](../db/projections.sql).
 
 ## מסלול ב' — יום fixture אחד
 

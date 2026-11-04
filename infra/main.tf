@@ -27,7 +27,7 @@ variable "instance_type" {
 }
 
 variable "data_volume_gb" {
-  description = "231.82 GiB measured, base plus three projections, and room to grow at +36 GiB a year."
+  description = "233.02 GiB measured, base plus four projections, and room to grow at +36 GiB a year."
   type        = number
   default     = 400
 }

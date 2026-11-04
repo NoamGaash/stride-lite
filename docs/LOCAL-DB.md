@@ -104,6 +104,9 @@ GROUP BY table ORDER BY sum(data_compressed_bytes) DESC;
 | 7 smaller tables | 60,113 | < 1 MiB |
 | **Total** | **13,728,053,041** | **163.22 GiB** |
 
+That is the dump as loaded and before any projection. Continuous ingest adds to it from there,
+and the projections below are on top again.
+
 Run `OPTIMIZE TABLE … FINAL` before you trust a size figure, or unsettled merges inflate it.
 
 ### Two projections, if you want the join-heavy endpoints to be fast
@@ -124,16 +127,23 @@ only reaches 1.22 s — the reasoning and the numbers are in
 
 Budget for projections when you quote storage. Measured, all three:
 
-| Table | Projection | Size |
-| --- | --- | --- |
-| `gtfs_ride_stop` | `by_ride` | 29.88 GiB |
-| `siri_ride_stop` | `by_gtfs_stop` | 19.31 GiB |
-| `siri_ride_stop` | `by_siri_ride` | 18.94 GiB |
+| Table | Projection | Size | What needs it |
+| --- | --- | --- | --- |
+| `gtfs_ride_stop` | `by_ride` | 29.88 GiB | join-heavy endpoints |
+| `siri_ride_stop` | `by_gtfs_stop` | 19.33 GiB | `/stop_arrivals/list` |
+| `siri_ride_stop` | `by_siri_ride` | 18.95 GiB | `/siri_ride_stops/list` |
+| `siri_ride` | `by_natural_key` | 0.87 GiB | the enrichment's ride lookup |
 
-163.22 GiB base plus 68.13 GiB of projections is **231.82 GiB**. `siri_ride_stop` needs two
-because it is filtered by two different foreign keys — `gtfs_stop_id` for `/stop_arrivals/list`
-and `siri_ride_id` for `/siri_ride_stops/list` — and sorted by neither. Each lookup goes from
-44 s to 0.016 s.
+163.98 GiB base plus 69.04 GiB of projections is **233.02 GiB** — projections are 30% of it.
+`siri_ride_stop` needs two because it is filtered by a different foreign key on each of two
+endpoints and sorted by neither; each lookup goes from 44 s to 0.016 s. `siri_ride` needs one
+because the enrichment asks "which of these rides already exist" every refresh, and without it
+that question builds a 6.83 GiB set.
+
+`by_gtfs_stop` is the one you can skip. It serves only `/stop_arrivals/list`, which cannot
+return a row from production for any input — see [FINDINGS.md](FINDINGS.md) — so leaving it
+out saves 19.33 GiB and changes nothing observable. All four are in
+[`db/projections.sql`](../db/projections.sql).
 
 ## Route B — one fixture day
 

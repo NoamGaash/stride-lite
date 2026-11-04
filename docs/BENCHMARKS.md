@@ -64,6 +64,8 @@ missing.
 | 7 smaller tables        | 60,113             | < 1 MiB        | —         | —        |
 | **Total**               | **13,728,053,041** | **163.22 GiB** | **12.76** | **4.24** |
 
+That total is the dump as loaded and before any projection; §11 has the figure to quote.
+
 **163 GiB holds the entire database**, against 692 GiB uncompressed. The one table the
 benchmark focused on came in at **111.52 GiB rather than the 159 GB extrapolated** — the
 extrapolation was 42% too high, because it scaled a single day of 2022 data and the per-row
@@ -796,9 +798,8 @@ All in eu-west-1, where the raw archive already lives, so S3 reads are same-regi
 | **Total**                                  | **~$96**                                         |
 
 **300 GB and not 200.** An earlier version of this table said 200 GB, which does not fit: the
-measured database is 163.22 GiB and the three projections the join-heavy endpoints need add
-68.13 GiB — measured since, not predicted — so 231.82 GiB is the real requirement before any
-growth headroom.
+measured database is 163.98 GiB and the four projections it needs add 69.04 GiB — measured
+since, not predicted — so 233.02 GiB is the real requirement before any growth headroom.
 
 One instance and not two: measured peak query memory was ≤25 MB and the API is a stateless
 Node process, so `infra/main.tf` provisions a single box for both. A 1-year reserved rate
@@ -1167,11 +1168,17 @@ two specific things, both nameable and both costed:
    +26 GiB — **predicted from the measured case, not itself measured**.
 
 That second point changes the storage figure materially: the 163 GiB whole-database number
-above does not include projections. Three of them add **68.13 GiB, taking the total to
-231.82 GiB** — still far below PostgreSQL's 1.34 TB for one table, but the honest number to
-put in front of the team is 232 GiB and not 163 GiB. `siri_ride_stop` needs two of the three,
-because it is filtered by `gtfs_stop_id` on one endpoint and by `siri_ride_id` on another and
-is sorted by neither.
+above does not include projections. Four of them add **69.04 GiB, taking the total to
+233.02 GiB**, which makes projections 30% of the footprint — still far below PostgreSQL's
+1.34 TB for one table, but the honest number to put in front of the team is 233 GiB and not
+164 GiB. `siri_ride_stop` needs two of the four, because it is filtered by `gtfs_stop_id` on
+one endpoint and by `siri_ride_id` on another and is sorted by neither; `siri_ride` needs the
+fourth so that the enrichment's "which of these rides already exist" is a seek rather than a
+6.83 GiB set.
+
+One of them is droppable. `siri_ride_stop.by_gtfs_stop`, 19.33 GiB, serves only
+`/stop_arrivals/list`, and that endpoint cannot return a row from production for any input —
+see [FINDINGS.md](FINDINGS.md).
 
 ### Endpoint coverage
 
