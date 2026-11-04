@@ -1,194 +1,242 @@
 import { describe, it, expect } from 'vitest'
+import spec from './openapi.json' with { type: 'json' }
 
 const PROD = process.env.PROD_API ?? 'https://open-bus-stride-api.hasadna.org.il'
 const LOCAL = process.env.LOCAL_API ?? 'http://127.0.0.1:8080'
 
 /**
  * Production is a live service run by a non-profit, not a test environment, so
- * requests are spaced out and the case list stays small.
+ * requests are spaced out and each case is asked once.
  */
 const DELAY_MS = Number(process.env.DIFF_DELAY_MS ?? 400)
 
 /**
- * The local database comes from the 2026-06-14 dump, whose data ends
- * 2026-05-29. Cases must stay inside that window or they fail for a reason
- * that is not a defect.
+ * Cases stay inside the window where the two databases hold the same rows, and
+ * that window is bounded at BOTH ends, which is easy to get wrong:
+ *
+ *   - the 2026-06-14 dump's data ends 2026-05-29, so nothing later exists here;
+ *   - production deletes old vehicle locations. Its oldest `siri_vehicle_location`
+ *     is 2025-01-01, and a 2023 row this database still holds
+ *     (id 1830886657) answers 404 there.
+ *
+ * So the dump is not a subset of production: it is a different set, and a
+ * comparison is only meaningful in the intersection, 2025-01-01 to 2026-05-29.
  */
 const DAY = '2026-05-20'
 
-/**
- * A gtfs_route whose rides fall inside the dump window. Filtering
- * `/gtfs_rides/list` on this indexed equality is the only shape production
- * answers without timing out.
- */
+/** A gtfs_route, and a ride of it, both inside the window. */
 const ROUTE_ID = '8953903'
+const GTFS_RIDE_ID = '144732116'
+
+/** One id per table, the lowest inside the window, for the `/get` endpoints. */
+const IDS = {
+  siri_route: '1',
+  siri_stop: '1',
+  gtfs_stop: '44980981',
+  gtfs_route: '8953416',
+  gtfs_ride: GTFS_RIDE_ID,
+  gtfs_ride_stop: '5173161605',
+  siri_ride: '136828319',
+  siri_ride_stop: '3492929357',
+  siri_snapshot: '2234591',
+  siri_vehicle_location: '7910843165',
+}
 
 interface Case {
   path: string
   params: Record<string, string>
+  /**
+   * The endpoint emits no ORDER BY, so row order is whatever the engine
+   * produced and only the set of rows is part of the contract.
+   */
+  unordered?: boolean
+  /**
+   * Production cannot answer this shape at all — PostgreSQL's statement timeout
+   * fires before it returns. There is nothing to compare against a timeout, so
+   * the case asserts only that this implementation answers, and the timeout is
+   * reported as a finding.
+   */
+  prodTimesOut?: boolean
 }
 
-/**
- * Row order is fully determined, so cases exercise the default and not only an
- * explicit `order_by`. Which default applies depends on how the handler is
- * declared: `/siri_routes/list` declares the parameter with a default of
- * `'id asc'`, while `/gtfs_stops/list` declares none and therefore always
- * orders by `id DESC` — confirmed against production, where an `order_by` sent
- * to `/gtfs_stops/list` changes nothing.
- *
- * Two kinds of case are excluded, both because the local database is built from
- * the 2026-06-14 dump while production keeps growing, and neither because of
- * anything the implementation does:
- *
- *   - unfiltered `get_count`, whose totals move with production;
- *   - descending order by id with no filter, which reads the newest rows and so
- *     by construction asks for rows the dump does not contain. Measured: the
- *     highest `/siri_routes/list` id is 19132 in production and 17846 here.
- *
- * A third kind is excluded for a different reason: some queries production
- * cannot answer at all. `/gtfs_rides/list` filtered by `gtfs_route__date` or by
- * `start_time` hits PostgreSQL's statement timeout — measured at 64s before it
- * gave up, against 1.2s and 8.0s for the same two queries here. There is
- * nothing to compare against a timeout, so those cases use an indexed equality
- * filter instead, and the timeout is recorded as a finding rather than a case.
- *
- * Ascending order by id is unaffected, since the oldest rows do not move, and a
- * descending case is still comparable once a filter bounds it to a window that
- * closed before the dump was taken.
- */
 const cases: Case[] = [
-  // no joins, small tables: the contract's simplest shape
+  // ---- small tables, no joins ----
   { path: '/siri_routes/list', params: { limit: '5' } },
   { path: '/siri_routes/list', params: { limit: '5', offset: '10', order_by: 'id asc' } },
   { path: '/siri_routes/list', params: { limit: '20', order_by: 'line_ref asc' } },
   { path: '/siri_stops/list', params: { limit: '10' } },
+  { path: '/siri_routes/get', params: { id: IDS.siri_route } },
+  { path: '/siri_stops/get', params: { id: IDS.siri_stop } },
 
-  // date filtering
+  // ---- date filtering ----
   { path: '/gtfs_stops/list', params: { date_from: DAY, date_to: DAY, limit: '10' } },
-  {
-    path: '/gtfs_routes/list',
-    params: { date_from: DAY, date_to: DAY, limit: '10', order_by: 'id desc' },
-  },
-  {
-    path: '/gtfs_stops/list',
-    params: { date_from: DAY, date_to: DAY, get_count: 'true' },
-  },
+  { path: '/gtfs_stops/list', params: { date_from: DAY, date_to: DAY, get_count: 'true' } },
+  { path: '/gtfs_routes/list', params: { date_from: DAY, date_to: DAY, limit: '10', order_by: 'id desc' } },
   { path: '/gtfs_routes/list', params: { date_from: DAY, date_to: DAY, limit: '10', order_by: 'id asc' } },
-  {
-    path: '/gtfs_routes/list',
-    params: { date_from: DAY, date_to: DAY, limit: '5', order_by: 'line_ref asc' },
-  },
+  { path: '/gtfs_routes/list', params: { date_from: DAY, date_to: DAY, limit: '5', order_by: 'line_ref asc' } },
+  { path: '/gtfs_stops/get', params: { id: IDS.gtfs_stop } },
+  { path: '/gtfs_routes/get', params: { id: IDS.gtfs_route } },
 
   // an order_by sent to an endpoint that declares none must be ignored
-  {
-    path: '/gtfs_stops/list',
-    params: { date_from: DAY, date_to: DAY, limit: '10', order_by: 'code desc' },
-  },
+  { path: '/gtfs_stops/list', params: { date_from: DAY, date_to: DAY, limit: '10', order_by: 'code desc' } },
 
-  // prefix filtering
-  {
-    path: '/siri_snapshots/list',
-    params: { snapshot_id_prefix: '2026/05/20', limit: '10', order_by: 'id asc' },
-  },
+  // ---- prefix filtering ----
+  { path: '/siri_snapshots/list', params: { snapshot_id_prefix: '2026/05/20', limit: '10', order_by: 'id asc' } },
+  { path: '/siri_snapshots/get', params: { id: IDS.siri_snapshot } },
 
-  // three joins, two of them outer: the gtfs_* fields must come back null on an
-  // unmatched row rather than as ClickHouse's column defaults
+  // ---- three joins, two outer ----
   {
     path: '/siri_rides/list',
-    params: {
-      scheduled_start_time_from: `${DAY}T05:00:00+00:00`,
-      scheduled_start_time_to: `${DAY}T05:05:00+00:00`,
-      limit: '5',
-      order_by: 'id asc',
-    },
+    params: { scheduled_start_time_from: `${DAY}T05:00:00+00:00`, scheduled_start_time_to: `${DAY}T05:05:00+00:00`, limit: '5', order_by: 'id asc' },
   },
   {
     path: '/siri_rides/list',
-    params: {
-      scheduled_start_time_from: `${DAY}T00:00:00+00:00`,
-      scheduled_start_time_to: `${DAY}T00:06:00+00:00`,
-      limit: '10',
-      order_by: 'id desc',
-    },
+    params: { scheduled_start_time_from: `${DAY}T00:00:00+00:00`, scheduled_start_time_to: `${DAY}T00:06:00+00:00`, limit: '10', order_by: 'id desc' },
   },
   {
     path: '/siri_rides/list',
-    params: {
-      scheduled_start_time_from: `${DAY}T05:00:00+00:00`,
-      scheduled_start_time_to: `${DAY}T06:00:00+00:00`,
-      gtfs_route__date_from: DAY,
-      gtfs_route__date_to: DAY,
-      limit: '10',
-      order_by: 'scheduled_start_time asc',
-    },
+    params: { scheduled_start_time_from: `${DAY}T05:00:00+00:00`, scheduled_start_time_to: `${DAY}T06:00:00+00:00`, gtfs_route__date_from: DAY, gtfs_route__date_to: DAY, limit: '10', order_by: 'scheduled_start_time asc' },
   },
   {
     path: '/siri_rides/list',
-    params: {
-      scheduled_start_time_from: `${DAY}T05:00:00+00:00`,
-      scheduled_start_time_to: `${DAY}T05:30:00+00:00`,
-      get_count: 'true',
-    },
+    params: { scheduled_start_time_from: `${DAY}T05:00:00+00:00`, scheduled_start_time_to: `${DAY}T05:30:00+00:00`, get_count: 'true' },
   },
+  { path: '/siri_rides/get', params: { id: IDS.siri_ride } },
 
-  // one inner join, filtered the only way production can answer quickly
+  // ---- one inner join, filtered the only way production answers quickly ----
   { path: '/gtfs_rides/list', params: { gtfs_route_id: ROUTE_ID, limit: '10', order_by: 'id asc' } },
-  {
-    path: '/gtfs_rides/list',
-    params: { gtfs_route_id: ROUTE_ID, limit: '5', offset: '3', order_by: 'start_time asc' },
-  },
+  { path: '/gtfs_rides/list', params: { gtfs_route_id: ROUTE_ID, limit: '5', offset: '3', order_by: 'start_time asc' } },
   { path: '/gtfs_rides/list', params: { gtfs_route_id: ROUTE_ID, get_count: 'true' } },
+  { path: '/gtfs_rides/get', params: { id: IDS.gtfs_ride } },
 
-  // the four-way inner join, the heaviest endpoint
+  // ---- the four-way inner join, the heaviest endpoint ----
   {
     path: '/siri_vehicle_locations/list',
-    params: {
-      recorded_at_time_from: `${DAY}T08:00:00+00:00`,
-      recorded_at_time_to: `${DAY}T08:05:00+00:00`,
-      limit: '20',
-      order_by: 'id asc',
-    },
+    params: { recorded_at_time_from: `${DAY}T08:00:00+00:00`, recorded_at_time_to: `${DAY}T08:05:00+00:00`, limit: '20', order_by: 'id asc' },
+  },
+  {
+    path: '/siri_vehicle_locations/list',
+    params: { recorded_at_time_from: `${DAY}T08:00:00+00:00`, recorded_at_time_to: `${DAY}T08:01:00+00:00`, get_count: 'true' },
   },
   {
     path: '/siri_vehicle_locations/list',
     params: {
-      recorded_at_time_from: `${DAY}T08:00:00+00:00`,
-      recorded_at_time_to: `${DAY}T08:01:00+00:00`,
-      get_count: 'true',
+      recorded_at_time_from: `${DAY}T08:00:00+00:00`, recorded_at_time_to: `${DAY}T09:00:00+00:00`,
+      lat__greater_or_equal: '32.0', lat__lower_or_equal: '32.15',
+      lon__greater_or_equal: '34.7', lon__lower_or_equal: '34.9',
+      limit: '25', order_by: 'distance_from_siri_ride_stop_meters desc',
     },
   },
-  {
-    path: '/siri_vehicle_locations/list',
-    params: {
-      recorded_at_time_from: `${DAY}T08:00:00+00:00`,
-      recorded_at_time_to: `${DAY}T09:00:00+00:00`,
-      lat__greater_or_equal: '32.0',
-      lat__lower_or_equal: '32.15',
-      lon__greater_or_equal: '34.7',
-      lon__lower_or_equal: '34.9',
-      limit: '25',
-      order_by: 'distance_from_siri_ride_stop_meters desc',
-    },
-  },
-
   // an empty range must come back empty rather than erroring
   {
     path: '/siri_vehicle_locations/list',
+    params: { recorded_at_time_from: `${DAY}T08:00:00+00:00`, recorded_at_time_to: `${DAY}T08:00:00+00:00`, limit: '10', order_by: 'id asc' },
+  },
+  { path: '/siri_vehicle_locations/get', params: { id: IDS.siri_vehicle_location } },
+
+  // ---- the two ride-stop tables ----
+  { path: '/gtfs_ride_stops/list', params: { gtfs_ride_ids: GTFS_RIDE_ID, limit: '20', order_by: 'id asc' } },
+  { path: '/gtfs_ride_stops/list', params: { gtfs_ride_ids: GTFS_RIDE_ID, get_count: 'true' } },
+  { path: '/gtfs_ride_stops/get', params: { id: IDS.gtfs_ride_stop } },
+  {
+    path: '/siri_ride_stops/list',
+    params: { siri_ride_ids: IDS.siri_ride, limit: '20' },
+  },
+  { path: '/siri_ride_stops/get', params: { id: IDS.siri_ride_stop } },
+
+  // ---- the seven hand-written aggregate endpoints ----
+  { path: '/gtfs_agencies/list', params: { date_from: DAY, date_to: DAY, limit: '20' } },
+  { path: '/gtfs_agencies/list', params: { date_from: DAY, date_to: DAY, limit: '5', offset: '3' } },
+  {
+    path: '/gtfs_rides_agg/list',
+    params: { date_from: DAY, date_to: DAY, limit: '5' },
+    prodTimesOut: true,
+  },
+  {
+    path: '/gtfs_rides_agg/group_by',
+    params: { date_from: DAY, date_to: DAY, group_by: 'operator_ref' },
+    unordered: true,
+  },
+  {
+    path: '/gtfs_rides_agg/group_by',
+    params: { date_from: DAY, date_to: DAY, group_by: 'gtfs_route_date,operator_ref' },
+    unordered: true,
+  },
+  {
+    path: '/rides_execution/list',
+    params: { date_from: DAY, date_to: DAY, operator_ref: '21', line_ref: '10746', limit: '20' },
+  },
+  {
+    path: '/rides_execution/list',
+    params: { date_from: DAY, date_to: DAY, operator_ref: '21', line_ref: '10746', get_count: 'true' },
+  },
+  {
+    path: '/route_timetable/list',
     params: {
-      recorded_at_time_from: `${DAY}T08:00:00+00:00`,
-      recorded_at_time_to: `${DAY}T08:00:00+00:00`,
+      planned_start_time_date_from: `${DAY}T08:00:00+00:00`,
+      planned_start_time_date_to: `${DAY}T08:30:00+00:00`,
+      line_refs: '10746',
       limit: '10',
-      order_by: 'id asc',
+    },
+  },
+  // Both sides return nothing, and that is the whole contract this endpoint can
+  // still be held to — see STOP_ARRIVALS_IS_DEAD below.
+  { path: '/stop_arrivals/list', params: { gtfs_stop_id: '44980981', limit: '10' } },
+  { path: '/stop_arrivals/list', params: { gtfs_ride_ids: GTFS_RIDE_ID, limit: '5' } },
+  {
+    path: '/siri_velocity_aggregation/siri_velocity_aggregation',
+    params: {
+      recorded_from: `${DAY}T00:00:00+00:00`,
+      lon_min: '34.78', lon_max: '34.80', lat_min: '32.07', lat_max: '32.09',
+      rounding_precision: '6',
     },
   },
 ]
 
 /**
- * Differences that are legitimate rather than defects. Every entry needs a
- * reason: a list that grows quietly is how a comparison like this stops
- * meaning anything.
+ * Differences that are legitimate rather than defects. Every entry states why,
+ * because a list that grows quietly is how a comparison like this stops meaning
+ * anything.
  */
-const ALLOWED_DIFFS: { path: string; field: string; why: string }[] = []
+const ALLOWED_DIFFS: { path: string; field: string; why: string }[] = [
+  {
+    path: '/siri_velocity_aggregation/siri_velocity_aggregation',
+    field: 'average_rolling_avg',
+    why:
+      'The rolling average uses ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING over ' +
+      'ORDER BY recorded_at_time, and that order has ties: 38,230 of 74,320 rows ' +
+      'in the measured window share a timestamp with another row. With a ROWS ' +
+      'frame the window contents then depend on physical row order, which no ' +
+      'engine defines. Measured: three identical calls to THIS implementation ' +
+      'returned three different values, so the field is not reproducible in ' +
+      'production either and cannot be compared byte for byte.',
+  },
+  {
+    path: '/siri_velocity_aggregation/siri_velocity_aggregation',
+    field: 'stddev_rolling_avg',
+    why: 'Same cause as average_rolling_avg above.',
+  },
+]
+
+/**
+ * `/stop_arrivals/list` cannot return a row from production, for any input.
+ * Measured, and worth stating because it looks like a defect in this
+ * implementation and is not one:
+ *
+ *   - the endpoint joins siri_ride_stop.nearest_siri_vehicle_location_id to
+ *     siri_vehicle_location;
+ *   - the newest value that column ever received is 4968453124, which is a
+ *     vehicle location recorded 2024-12-04, so the ETL that fills it
+ *     (siri-update-ride-stops-vehicle-locations) stopped then;
+ *   - production's oldest surviving vehicle location is 2025-01-01.
+ *
+ * The two windows do not overlap, so the join matches nothing there. This
+ * database still holds the older rows, so the same SQL returns them here. The
+ * join tree is identical to production's own, which its timeout message prints
+ * in full; the difference is retention, not logic.
+ */
+const STOP_ARRIVALS_IS_DEAD = true
+void STOP_ARRIVALS_IS_DEAD
 
 function url(base: string, c: Case): string {
   const u = new URL(base + c.path)
@@ -208,7 +256,7 @@ async function fetchJson(target: string): Promise<{ status: number; body: unknow
   return { status: res.status, body }
 }
 
-/** Drops fields that are allowed to differ, so the rest must match exactly. */
+/** Drops fields that are allowed to differ, so everything else must match exactly. */
 function strip(path: string, value: unknown): unknown {
   const fields = ALLOWED_DIFFS.filter((d) => d.path === path).map((d) => d.field)
   if (fields.length === 0) return value
@@ -221,12 +269,26 @@ function strip(path: string, value: unknown): unknown {
   return Array.isArray(value) ? value.map(clean) : clean(value)
 }
 
+/** For an endpoint that emits no ORDER BY, compare the rows as a set. */
+function canonical(value: unknown): unknown {
+  if (!Array.isArray(value)) return value
+  return [...value].map((r) => JSON.stringify(r)).sort()
+}
+
 const label = (c: Case) =>
-  `${c.path} ${
-    Object.entries(c.params)
-      .map(([k, v]) => `${k}=${v}`)
-      .join('&') || '(defaults)'
-  }`
+  `${c.path} ${Object.entries(c.params).map(([k, v]) => `${k}=${v}`).join('&') || '(defaults)'}`
+
+describe('every endpoint in the published spec has a case', () => {
+  it('covers all of them', () => {
+    const published = Object.entries(spec.paths as Record<string, Record<string, unknown>>)
+      .filter(([, v]) => 'get' in v)
+      .map(([p]) => p)
+      .sort()
+    const covered = [...new Set(cases.map((c) => c.path))].sort()
+    expect(published.filter((p) => !covered.includes(p))).toStrictEqual([])
+    expect(covered.filter((p) => !published.includes(p))).toStrictEqual([])
+  })
+})
 
 describe('responses match production', () => {
   for (const c of cases) {
@@ -234,11 +296,20 @@ describe('responses match production', () => {
       label(c),
       async () => {
         await new Promise((r) => setTimeout(r, DELAY_MS))
+        if (c.prodTimesOut) {
+          const local = await fetchJson(url(LOCAL, c))
+          expect(local.status, 'this implementation must still answer').toBe(200)
+          expect(Array.isArray(local.body)).toBe(true)
+          return
+        }
         const [prod, local] = await Promise.all([fetchJson(url(PROD, c)), fetchJson(url(LOCAL, c))])
         expect(local.status, 'http status').toBe(prod.status)
-        expect(strip(c.path, local.body)).toStrictEqual(strip(c.path, prod.body))
+        const l = strip(c.path, local.body)
+        const p = strip(c.path, prod.body)
+        if (c.unordered) expect(canonical(l)).toStrictEqual(canonical(p))
+        else expect(l).toStrictEqual(p)
       },
-      60_000,
+      180_000,
     )
   }
 })

@@ -89,6 +89,7 @@ export const endpoints: EndpointDef[] = [
   },
   {
     path: '/siri_snapshots/list',
+    textOrder: ['snapshot_id'],
     model: 'SiriSnapshot',
     table: `${DB}.siri_snapshot`,
     alias: 'sn',
@@ -207,6 +208,7 @@ export const endpoints: EndpointDef[] = [
   },
   {
     path: '/siri_rides/list',
+    textOrder: ['journey_ref', 'vehicle_ref'],
     model: 'SiriRide',
     table: `${DB}.siri_ride`,
     alias: 'r',
@@ -321,6 +323,7 @@ export const endpoints: EndpointDef[] = [
   },
   {
     path: '/gtfs_rides/list',
+    textOrder: ['journey_ref'],
     model: 'GtfsRide',
     table: `${DB}.gtfs_ride`,
     alias: 'r',
@@ -498,14 +501,34 @@ export const endpoints: EndpointDef[] = [
     // Join order is fixed by alias dependencies, not by taste: gtfs_ride_stop
     // is matched on both gtfs_stop and gtfs_ride, so both must already be in
     // scope, and gtfs_route hangs off gtfs_ride.
+    // Every big right side is prefiltered to the ids the base filter can
+    // produce; see `joins` in sql.ts. siri_stop is 36k rows and needs none.
     joins: [
-      `INNER JOIN ${DB}.siri_ride AS sr ON sr.id = rs.siri_ride_id`,
+      `INNER JOIN (SELECT * FROM ${DB}.siri_ride WHERE id IN (
+          SELECT siri_ride_id FROM ${DB}.siri_ride_stop WHERE __BASE_WHERE__
+        )) AS sr ON sr.id = rs.siri_ride_id`,
       `INNER JOIN ${DB}.siri_stop AS ss ON ss.id = rs.siri_stop_id`,
-      `LEFT JOIN ${DB}.gtfs_stop AS gs ON gs.id = rs.gtfs_stop_id`,
-      `LEFT JOIN ${DB}.siri_vehicle_location AS vl ON vl.id = rs.nearest_siri_vehicle_location_id`,
-      `LEFT JOIN ${DB}.gtfs_ride AS gr ON gr.id = sr.gtfs_ride_id`,
-      `LEFT JOIN ${DB}.gtfs_ride_stop AS grs ON grs.gtfs_stop_id = gs.id AND grs.gtfs_ride_id = gr.id`,
-      `LEFT JOIN ${DB}.gtfs_route AS grt ON grt.id = gr.gtfs_route_id`,
+      `LEFT JOIN (SELECT * FROM ${DB}.gtfs_stop WHERE id IN (
+          SELECT gtfs_stop_id FROM ${DB}.siri_ride_stop WHERE __BASE_WHERE__
+        )) AS gs ON gs.id = rs.gtfs_stop_id`,
+      `LEFT JOIN (SELECT * FROM ${DB}.siri_vehicle_location WHERE id IN (
+          SELECT nearest_siri_vehicle_location_id FROM ${DB}.siri_ride_stop WHERE __BASE_WHERE__
+        )) AS vl ON vl.id = rs.nearest_siri_vehicle_location_id`,
+      `LEFT JOIN (SELECT * FROM ${DB}.gtfs_ride WHERE id IN (
+          SELECT gtfs_ride_id FROM ${DB}.siri_ride WHERE id IN (
+            SELECT siri_ride_id FROM ${DB}.siri_ride_stop WHERE __BASE_WHERE__
+          )
+        )) AS gr ON gr.id = sr.gtfs_ride_id`,
+      `LEFT JOIN (SELECT * FROM ${DB}.gtfs_ride_stop WHERE gtfs_stop_id IN (
+          SELECT gtfs_stop_id FROM ${DB}.siri_ride_stop WHERE __BASE_WHERE__
+        )) AS grs ON grs.gtfs_stop_id = gs.id AND grs.gtfs_ride_id = gr.id`,
+      `LEFT JOIN (SELECT * FROM ${DB}.gtfs_route WHERE id IN (
+          SELECT gtfs_route_id FROM ${DB}.gtfs_ride WHERE id IN (
+            SELECT gtfs_ride_id FROM ${DB}.siri_ride WHERE id IN (
+              SELECT siri_ride_id FROM ${DB}.siri_ride_stop WHERE __BASE_WHERE__
+            )
+          )
+        )) AS grt ON grt.id = gr.gtfs_route_id`,
     ],
     fields: [
       'id',

@@ -2,11 +2,35 @@ import { createServer } from 'node:http'
 import { query, scalar, lit, ClickHouseError } from './ch'
 import { buildQuery, BadRequest, BadInput, TzRequired, UnknownOrderField } from './sql'
 import { endpoints, getEndpoints } from './registry'
+import { rawEndpoints, wrap, type RawEndpointDef } from './raw'
 
 const PORT = Number(process.env.PORT ?? 8080)
 
 const byPath = new Map(endpoints.map((e) => [e.path, e]))
 const getByPath = new Map(getEndpoints.map((e) => [e.path, e]))
+const rawByPath = new Map(rawEndpoints.map((e) => [e.path, e]))
+const DB = process.env.CH_DB ?? 'stride'
+
+/**
+ * Applies the response model's own coercions. A field declared `datetime.date`
+ * on a timestamp column renders as a bare day, and one declared `str` on an
+ * integer column renders quoted; both change the bytes a client sees. `shape`
+ * then fixes the key order and fills every declared field, because FastAPI
+ * emits all of a response model's fields whether the query produced them or not.
+ */
+function shapeRow(def: RawEndpointDef, row: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(row)) {
+    const how = def.coerce?.[k]
+    if (how === 'date' && typeof v === 'string') out[k] = v.slice(0, 10)
+    else if (how === 'string' && v !== null && v !== undefined) out[k] = String(v)
+    else out[k] = v
+  }
+  if (!def.shape) return out
+  const ordered: Record<string, unknown> = {}
+  for (const k of def.shape) ordered[k] = k in out ? out[k] : null
+  return ordered
+}
 
 const DATETIME = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(?:\.(\d+))?$/
 
@@ -63,6 +87,14 @@ const server = createServer(async (req, res) => {
       return send(200, rows.map(normalize))
     }
 
+    const rawDef = rawByPath.get(url.pathname)
+    if (rawDef) {
+      const { sql, isCount } = wrap(rawDef, rawDef.build(url.searchParams, DB), url.searchParams)
+      if (isCount) return send(200, await scalar(sql))
+      const rows = await query(`${sql} ${SETTINGS}`)
+      return send(200, rows.map((r) => shapeRow(rawDef, normalize(r))))
+    }
+
     const getDef = getByPath.get(url.pathname)
     if (getDef) {
       const id = url.searchParams.get('id')
@@ -91,6 +123,6 @@ const server = createServer(async (req, res) => {
 })
 
 server.listen(PORT, '127.0.0.1', () => {
-  const paths = endpoints.length + getEndpoints.length
+  const paths = endpoints.length + getEndpoints.length + rawEndpoints.length
   console.log(`stride-lite listening on http://127.0.0.1:${PORT} (${paths} endpoints)`)
 })

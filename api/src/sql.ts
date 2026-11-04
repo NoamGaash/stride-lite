@@ -54,10 +54,29 @@ export interface EndpointDef {
   fields: string[]
   related?: Related[]
   filters: FilterDef[]
-  /** Extra joins needed only to reach a related table. */
+  /**
+   * Extra joins needed only to reach a related table.
+   *
+   * A join may contain `__BASE_WHERE__`, which is replaced with the filters
+   * that apply to the base table alone. That is what lets a join read a
+   * prefiltered subquery instead of the whole table: ClickHouse hashes a join's
+   * right side whole, so joining siri_vehicle_location (6.5 billion rows) by id
+   * exceeds any memory ceiling however few base rows there are. Restricting the
+   * right side to the ids the base filter can produce is the documented
+   * two-stage shape, expressed in one statement.
+   *
+   * Only base-table filters can go in there, because the other aliases do not
+   * exist inside the subquery. When a request filters on nothing but a joined
+   * table, the prefilter degenerates to the whole table and the query is as
+   * heavy as upstream's.
+   */
   joins?: string[]
   /** Fields that may be used in `order_by`, mapped to their SQL expression. */
   orderable?: Record<string, string>
+  /**
+   * Which of those are text columns. They sort differently: see `collate`.
+   */
+  textOrder?: string[]
   /**
    * The default of the endpoint's `order_by` parameter. Absent means the
    * endpoint declares no such parameter, in which case one sent by a caller is
@@ -200,7 +219,16 @@ export function buildQuery(def: EndpointDef, params: URLSearchParams): BuildResu
     if (clause) where.push(clause)
   }
 
-  const from = [`FROM ${def.table} AS ${def.alias}`, ...(def.joins ?? [])]
+  // The alias is stripped because the substituted condition lands inside a
+  // subquery over the base table itself, where the outer alias is not in scope:
+  // ClickHouse rejects a correlated subquery as an IN argument.
+  const baseWhere = where
+    .filter((c) => c.startsWith(`${def.alias}.`))
+    .map((c) => c.split(`${def.alias}.`).join(''))
+  const joins = (def.joins ?? []).map((j) =>
+    j.replace(/__BASE_WHERE__/g, baseWhere.length ? baseWhere.join(' AND ') : '1'),
+  )
+  const from = [`FROM ${def.table} AS ${def.alias}`, ...joins]
   const whereSql = where.length ? `\nWHERE ${where.join('\n  AND ')}` : ''
 
   if (getCount) {
@@ -247,6 +275,19 @@ function parseLimit(raw: string | null): number {
  * `id DESC` is appended as a tiebreaker unless the caller already ordered by
  * id, which is what makes order deterministic and the comparison possible.
  */
+/**
+ * PostgreSQL sorts text through the database's glibc collation, which compares
+ * in two passes: first ignoring punctuation and whitespace, then, for strings
+ * equal under that, comparing them in full. ClickHouse compares bytes, and
+ * `COLLATE 'he'` does not help because ICU treats punctuation as significant by
+ * default. Measured on `/gtfs_agencies/list`, where the two orders disagree:
+ * production puts "ירושלים - עיסאוויה…" after "ירושלים-דרום…", a byte sort puts
+ * it before, and this expression reproduces production's order on all 20 rows.
+ */
+function collate(expr: string): string {
+  return `replaceRegexpAll(${expr}, '[^\\pL\\pN]', '') COLLATE 'he', ${expr} COLLATE 'he'`
+}
+
 function buildOrderBy(def: EndpointDef, sent: string | null): string {
   if (def.skipOrderBy) return ''
   const raw = def.orderByDefault === undefined ? '' : (sent ?? def.orderByDefault)
@@ -259,7 +300,12 @@ function buildOrderBy(def: EndpointDef, sent: string | null): string {
     const expr = def.orderable?.[field]
     if (!expr) throw new UnknownOrderField(def.model, field)
     if (field.toLowerCase() === 'id') hasId = true
-    parts.push(`${expr} ${direction === 'desc' ? 'DESC' : 'ASC'}`)
+    const dir = direction === 'desc' ? 'DESC' : 'ASC'
+    if (def.textOrder?.includes(field)) {
+      parts.push(...collate(expr).split(', ').map((e) => `${e} ${dir}`))
+    } else {
+      parts.push(`${expr} ${dir}`)
+    }
   }
   if (!hasId) parts.push(`${def.alias}.id DESC`)
   return parts.length ? `\nORDER BY ${parts.join(', ')}` : ''
