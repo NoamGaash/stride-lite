@@ -40,7 +40,7 @@ loaded and counted, not extrapolated.
 | `siri_vehicle_location` (6.5 billion rows) | **1.34 TB** | **111.52 GiB** |
 | The entire database | ~692 GiB of data + ~760 GB of indexes | **163.22 GiB** |
 | Growth per year | +307 GB | **+36 GB** |
-| Estimated AWS bill | — | **~$102/month** |
+| Estimated AWS bill | — | **~$96/month** |
 
 Three findings behind them:
 
@@ -85,6 +85,63 @@ source and live probes reveal, each of which silently breaks a client if you get
   query, so that shape cannot serve as a differential baseline.
 
 ## Architecture
+
+```mermaid
+flowchart TB
+    MOT["Ministry of Transport<br/>SIRI feed, real time"]
+    MOTG["Ministry of Transport<br/>GTFS feed, daily"]
+
+    MOT --> REQ["open-bus-siri-requester<br/>runs in production today"]
+    MOTG --> REQG["gtfs-etl-download-upload<br/>runs in production today"]
+
+    REQ --> S3S["s3://openbus-stride-public/stride-siri-requester/<br/>YYYY/MM/DD/HH/MM.br &middot; public, no credentials<br/><b>fresh</b>"]
+    REQG --> S3G["s3://openbus-stride-public/gtfs_archive/<br/>YYYY/MM/DD/israel-public-transportation.zip &middot; 170 MB a day<br/><b>fresh</b>"]
+
+    DUMP["s3://openbus-stride-public/stride_db.sql.zst<br/>pg_dump of production, 154 GB compressed<br/><b>stale: Last-Modified 2026-06-14</b>"]
+
+    subgraph CH["ClickHouse &mdash; one node, no scheduler, no Airflow"]
+        direction TB
+        RAW["siri_vehicle_location_raw<br/>the feed as it arrives<br/>every field a string, no foreign keys"]
+        TYPED["siri_vehicle_location + 15 tables<br/>what the API serves<br/>typed, integer foreign keys"]
+        GTFS["gtfs_route &middot; gtfs_stop &middot; gtfs_ride<br/>loaded from the dump, not yet refreshed"]
+    end
+
+    S3S -->|"ingest/siri.sql<br/>REFRESH EVERY 1 MINUTE<br/>1 h of snapshots in 5-6 s"| RAW
+    DUMP -->|"scripts/load-from-dump.sh<br/>one-time bootstrap<br/>13.7 b rows"| TYPED
+    DUMP --> GTFS
+    S3G -.->|"daily GTFS refresh<br/>NOT BUILT"| GTFS
+    RAW -.->|"enrichment<br/>NOT BUILT"| TYPED
+
+    TYPED --> API["stride-lite API<br/>TypeScript, 20 of 27 endpoints"]
+    GTFS --> API
+    API --> FE["open-bus-map-search<br/>and public API consumers"]
+
+    classDef ext fill:#e2e8f0,stroke:#475569,color:#0f172a
+    classDef live fill:#dbeafe,stroke:#2563eb,color:#0f172a
+    classDef stale fill:#fef3c7,stroke:#d97706,color:#0f172a
+    classDef done fill:#dcfce7,stroke:#16a34a,color:#0f172a
+    classDef todo fill:#fee2e2,stroke:#dc2626,color:#0f172a
+
+    class MOT,MOTG,REQ,REQG,FE ext
+    class S3S,S3G live
+    class DUMP stale
+    class RAW,TYPED,GTFS,API done
+```
+
+**Solid arrows are built and measured; dashed arrows are not built.** Three data sources, and
+the difference between them matters:
+
+- **The requester archives are live.** `stride-siri-requester/` gets a snapshot roughly every
+  minute and `gtfs_archive/` a feed every day, both written by processes already running in
+  production, both public and readable with `NOSIGN`. This is what the continuous ingest reads.
+- **The database backup is not live.** It is a one-time bootstrap for four years of history,
+  and it stopped being written on 2026-06-14.
+- So the raw table tracks today while the API's tables stop at the dump — because the
+  enrichment that would connect them is the missing arrow.
+
+All three paths were checked against S3 on 2026-11-04: the dump still answers
+`Last-Modified: Sun, 14 Jun 2026`, `gtfs_archive/2026/11/03/` holds that day's feed, and
+`stride-siri-requester/2026/11/04/` was already on hour 05.
 
 | Layer | Technology | New code |
 | --- | --- | --- |
@@ -150,7 +207,7 @@ The directory boundaries are kept clean from day one so that split is mechanical
   against 0.063–0.090 s. B-tree indexes on `lon`/`lat` are the right tool there, and closing
   the gap with skip indexes is work not yet done.
 - The AWS estimate's one unquantified risk is **egress above CloudFront's free 1 TB**,
-  which needs a real traffic figure before anyone relies on the ~$102. The estimate itself is
+  which needs a real traffic figure before anyone relies on the ~$96. The estimate itself is
   built from published AWS rates; what the project pays today was reported privately and is
   not in this repository.
 - **Projections are not in the 163 GiB.** Two of them take the honest total to ~219 GiB.

@@ -49,7 +49,7 @@ cd api && npm ci && CH_DB=stride npm start                 # API על :8080
 | `siri_vehicle_location` (6.5 מיליארד שורות) | **1.34 TB** | **111.52 GiB** |
 | כל מסד הנתונים | כ-692 GiB נתונים גולמיים ועוד כ-760 GB אינדקסים | **163.22 GiB** |
 | גדילה בשנה | +307 GB | **+36 GB** |
-| חשבון AWS משוער | — | **כ-$102 לחודש** |
+| חשבון AWS משוער | — | **כ-$96 לחודש** |
 
 שלושה ממצאים שמסבירים אותם:
 
@@ -101,6 +101,65 @@ cd api && npm ci && CH_DB=stride npm start                 # API על :8080
   הצורה הזאת לא יכולה לשמש בסיס להשוואה דיפרנציאלית.
 
 ## ארכיטקטורה
+
+```mermaid
+flowchart TB
+    MOT["Ministry of Transport<br/>SIRI feed, real time"]
+    MOTG["Ministry of Transport<br/>GTFS feed, daily"]
+
+    MOT --> REQ["open-bus-siri-requester<br/>runs in production today"]
+    MOTG --> REQG["gtfs-etl-download-upload<br/>runs in production today"]
+
+    REQ --> S3S["s3://openbus-stride-public/stride-siri-requester/<br/>YYYY/MM/DD/HH/MM.br &middot; public, no credentials<br/><b>fresh</b>"]
+    REQG --> S3G["s3://openbus-stride-public/gtfs_archive/<br/>YYYY/MM/DD/israel-public-transportation.zip &middot; 170 MB a day<br/><b>fresh</b>"]
+
+    DUMP["s3://openbus-stride-public/stride_db.sql.zst<br/>pg_dump of production, 154 GB compressed<br/><b>stale: Last-Modified 2026-06-14</b>"]
+
+    subgraph CH["ClickHouse &mdash; one node, no scheduler, no Airflow"]
+        direction TB
+        RAW["siri_vehicle_location_raw<br/>the feed as it arrives<br/>every field a string, no foreign keys"]
+        TYPED["siri_vehicle_location + 15 tables<br/>what the API serves<br/>typed, integer foreign keys"]
+        GTFS["gtfs_route &middot; gtfs_stop &middot; gtfs_ride<br/>loaded from the dump, not yet refreshed"]
+    end
+
+    S3S -->|"ingest/siri.sql<br/>REFRESH EVERY 1 MINUTE<br/>1 h of snapshots in 5-6 s"| RAW
+    DUMP -->|"scripts/load-from-dump.sh<br/>one-time bootstrap<br/>13.7 b rows"| TYPED
+    DUMP --> GTFS
+    S3G -.->|"daily GTFS refresh<br/>NOT BUILT"| GTFS
+    RAW -.->|"enrichment<br/>NOT BUILT"| TYPED
+
+    TYPED --> API["stride-lite API<br/>TypeScript, 20 of 27 endpoints"]
+    GTFS --> API
+    API --> FE["open-bus-map-search<br/>and public API consumers"]
+
+    classDef ext fill:#e2e8f0,stroke:#475569,color:#0f172a
+    classDef live fill:#dbeafe,stroke:#2563eb,color:#0f172a
+    classDef stale fill:#fef3c7,stroke:#d97706,color:#0f172a
+    classDef done fill:#dcfce7,stroke:#16a34a,color:#0f172a
+    classDef todo fill:#fee2e2,stroke:#dc2626,color:#0f172a
+
+    class MOT,MOTG,REQ,REQG,FE ext
+    class S3S,S3G live
+    class DUMP stale
+    class RAW,TYPED,GTFS,API done
+```
+
+**חצים מלאים הם מה שבנוי ונמדד; חצים מקוטעים הם מה שלא נבנה.** תוויות התרשים באנגלית
+בכוונה — שמות טבלאות ונתיבי S3 הם ממילא לטינית, ועירוב כיווניות בתוך SVG נשבר.
+
+שלושה מקורות דאטא, וההבדל ביניהם הוא מה שחשוב:
+
+- **הארכיונים של ה-requesters חיים.** ל-`stride-siri-requester/` נכנס snapshot בקירוב כל דקה
+  ול-`gtfs_archive/` פיד כל יום, שניהם נכתבים על ידי תהליכים שכבר רצים בפרודקשן, ושניהם
+  ציבוריים וניתנים לקריאה עם `NOSIGN`. זה מה שלופ ה-ingest הרציף קורא.
+- **הגיבוי של מסד הנתונים אינו חי.** הוא bootstrap חד-פעמי לארבע שנות היסטוריה, והוא הפסיק
+  להיכתב ב-14/06/2026.
+- לכן הטבלה הגולמית מתעדכנת עד היום, בעוד הטבלאות שה-API משרת נעצרות בדאמפ — כי ה-enrichment
+  שהיה מחבר ביניהן הוא החץ החסר.
+
+שלושת הנתיבים נבדקו מול S3 ב-04/11/2026: הדאמפ עדיין מחזיר
+`Last-Modified: Sun, 14 Jun 2026`, ב-`gtfs_archive/2026/11/03/` יש את הפיד של אותו יום,
+ו-`stride-siri-requester/2026/11/04/` היה כבר בשעה 05.
 
 | שכבה | טכנולוגיה | קוד חדש |
 | --- | --- | --- |
@@ -170,7 +229,7 @@ docs/             BENCHMARKS.md (הדוח המלא), LOCAL-DB.md
   שניות מול 0.063-0.090. אינדקסי B-tree על `lon`/`lat` הם הכלי הנכון שם, וסגירת הפער עם
   skip indexes היא עבודה שלא נעשתה.
 - הסיכון היחיד שלא כומת בהערכת ה-AWS הוא **egress מעל ה-1 TB החינמי של CloudFront**, וצריך
-  נתון תעבורה אמיתי לפני שמישהו נשען על ה-$102. ההערכה עצמה בנויה ממחירון AWS הפומבי; מה
+  נתון תעבורה אמיתי לפני שמישהו נשען על ה-$96. ההערכה עצמה בנויה ממחירון AWS הפומבי; מה
   שהפרויקט משלם היום דווח לנו בפרטי ואינו בריפו הזה.
 - **ה-projections אינם בתוך ה-163 GiB.** שניים מהם מביאים את הסך הכל הכשר ל-219 GiB.
 - הריפו הזה לא עונה על השאלות שבאמת מכריעות מיגרציה: מי מתחזק, מה קורה בשלוש לפנות בוקר,
