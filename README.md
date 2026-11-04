@@ -1,6 +1,6 @@
 # stride-lite
 
-[עברית](README.he.md) · **[Who decided what](#who-decided-what)** · [Cost, performance, tradeoffs](docs/DEPLOYMENT.md) · [Roadmap](ROADMAP.md) · [Measurements](docs/BENCHMARKS.md) · [Run it locally](docs/LOCAL-DB.md)
+[עברית](README.he.md) · **[Who decided what](#who-decided-what)** · **[What this found out about production](docs/FINDINGS.md)** · [Cost, performance, tradeoffs](docs/DEPLOYMENT.md) · [Roadmap](ROADMAP.md) · [Measurements](docs/BENCHMARKS.md) · [Run it locally](docs/LOCAL-DB.md)
 
 A from-scratch reimplementation of the [Open Bus Stride](https://github.com/hasadna/open-bus-stride-api)
 backend on ClickHouse. Same API contract, byte for byte; a fraction of the storage; no

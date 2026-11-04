@@ -12,12 +12,19 @@
 --    densely from max(id) rather than reproduced from production's sequences.
 --
 -- 2. A ride's identity is (siri_route_id, journey_ref, vehicle_ref) and NOT its
---    scheduled_start_time. Verified against the dump: those three are already
---    unique over 123,622 rides in a day. scheduled_start_time is an attribute
---    of the ride, taken from its earliest observation, which is why it is an
---    argMin and not part of the key. Keying on it instead splits one ride into
---    several whenever the feed revises the departure time — measured, 65 rows
---    in a single minute.
+--    scheduled_start_time. This is not inferred: open-bus-siri-etl's
+--    `get_or_create_siri_rides` looks a ride up by exactly those three, and sets
+--    scheduled_start_time only on the row it creates. Confirmed against the
+--    dump, where the three are already unique over 123,622 rides in a day.
+--    Keying on the departure time instead splits one ride into several whenever
+--    the feed revises it — measured, 65 rows in a single minute.
+--
+--    Because the attribute is frozen at creation, the argMin is over
+--    siri_snapshot_id and not over recorded_at_time: the value upstream keeps is
+--    the one carried by the first snapshot that mentioned the ride, and
+--    snapshots are processed in snapshot order. A ride first seen before the
+--    loaded window therefore keeps a departure time this database cannot
+--    derive, which is what a backfill has to load oldest-hour-first to avoid.
 --
 -- Each step is a plain view holding the SELECT, and a refreshable view that
 -- appends it. `ingest/enrich-once.sql` runs the same bodies as INSERTs for a
@@ -124,7 +131,7 @@ FROM (
         r.id AS siri_route_id,
         v.journey_ref AS journey_ref,
         v.vehicle_ref AS vehicle_ref,
-        argMin(v.scheduled_start_time, v.recorded_at_time) AS scheduled_start_time
+        argMin(v.scheduled_start_time, v.siri_snapshot_id) AS scheduled_start_time
     FROM siri_feed AS v
     INNER JOIN siri_route AS r
         ON r.line_ref = v.line_ref AND r.operator_ref = v.operator_ref
