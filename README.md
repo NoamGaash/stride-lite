@@ -49,6 +49,8 @@ results as production.
 | **Availability is not a requirement.** Days of downtime are acceptable because the requesters keep writing to S3 and everything else is derived | Backups, snapshots, failover and health alarms — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
 | **Deletion is not irreversible** where the output is reproducible with compute | Treating 208 GB of intermediate files as precious |
 | What the project pays today is **private**; estimates from public rates are fine | Any comparison quoting the real invoice |
+| **Install whatever is needed to run things.** The session is in a container | Verifying by reading source what could have been executed |
+| **A test for a fix must be shown failing without the fix** | A test committed on the strength of passing once |
 | A **public repository**, no secrets, Hebrew and English documentation | — |
 | **AI agents must identify themselves** when acting in the project (the repo's own rule) | — |
 
@@ -65,6 +67,8 @@ None of the following was requested. Each is a judgement call, and each could be
 | **No dbt, scheduler, queue, cache or ORM** | Criterion 2 — each would have to earn its place | A measurement showing one is needed |
 | **Terraform**, as a module beside `hasadna-iac`'s existing ones | Continuation rather than a parallel toolchain | — |
 | **The stale dump's window is the test boundary** | Every differential case must sit inside it or fail for a reason that is not a bug | Fresh data — which continuous ingest now provides, so the newer cases compare against today |
+| **Sequential surrogate ids**, taken from the dump and continued with `max(id) + row_number()` | It is what the dump holds, so historical responses compare byte for byte | Measured 2026-11-05: identity derived as a hash of the natural key answers the same query ~100x faster and would delete the 52% of the database that exists only to hold these keys. The id constraint permits a wider type, so nothing blocks it but the work — see [db-benchmark](https://github.com/NoamGaash/open-bus-map-search/tree/main/db-benchmark) |
+| **Precomputation only where a query cannot do the work** | `gtfs_rides_agg_by_hour` as a plain view exceeds a 4 GiB ceiling, and stored it costs 181 MiB — 0.07% of the database. The identity tables cost 52% and make queries slower | — |
 | **`m7g.large` + 300 GB gp3** for the estimate | Peak measured query memory was ≤25 MB, so 8 GB is not optimistic; the disk, not the instance, is what the bill turns on | A 24-hour steady-state measurement, which has not been run |
 
 ### What the agent actually did
@@ -79,6 +83,16 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
   bandwidth and memory ceilings.
 
 - Built the enrichment, so SIRI flows from S3 to the API with no scheduler.
+- Found that neither production nor this implementation compressed anything, and fixed it
+  upstream: `/siri_vehicle_locations/list` serves 362,974 bytes where gzip gives 33,503, and
+  `/openapi.json` 130,022 where gzip gives 9,186. Opened
+  [hasadna/open-bus-stride-api#69](https://github.com/hasadna/open-bus-stride-api/pull/69)
+  with three tests, each shown failing without the fix.
+- Checked the CloudFront free tier against real traffic: 39,123 page views in 30 days leave
+  256 requests and 27 MB of free allowance per view, so egress is projected to cost nothing at
+  this scale. The binding limit is requests, not bytes.
+- Closed port 22. The instance profile already carries SSM and no key pair is attached, so the
+  SSH rule admitted nobody.
 - Read the upstream ETL rather than guessing at it, which is what settled the ride-identity
   and coordinate-dropping rules, and what turned up the findings in
   [docs/FINDINGS.md](docs/FINDINGS.md).
@@ -91,6 +105,16 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
   enrichment together cost **14.7 s per hour of feed** — 9.8 s to pull the snapshots and 4.9 s
   to derive the typed rows — so a week of missed data takes about 41 minutes on six throttled
   cores. What is still unmeasured is RSS and CPU held over a full day of continuous running.
+- **Ride durations are not computed.** 0 of 220,518 rides since 2026-11-03 carry
+  `duration_minutes`, where production returns a number. The differential suite passed because
+  its cases sit inside the dump's window, where the value came from the dump. It is a one-pass
+  aggregation over each ride's own locations, measured at 0.087 s for a whole day, and it is a
+  field derived from ministry data, so it falls under byte-for-byte. Upstream
+  (`open-bus-stride-etl/siri/add_ride_durations.py`) is one `UPDATE` with window functions and
+  no heuristics, gated on three clock rules: a duration is written only once the ride's last
+  location is 6 hours old, a ride still without locations after 2 days is stamped `0` rather
+  than left null, and `updated_duration_minutes` records when the task ran — which is ETL
+  bookkeeping, and therefore ours.
 - **Nothing is deployed.** Priced at $3.24/day and `infra/` provisions a node that boots
   itself, but nothing has been applied.
 
