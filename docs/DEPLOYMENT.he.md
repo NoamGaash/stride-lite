@@ -298,7 +298,7 @@ ECS או Fargate היו מוסיפים שכבת תזמור סביב תהליך �
 | `aws_instance.app` | `m7g.large` אחד, 20 GB שורש | מריץ את ClickHouse **וגם** את ה-API |
 | `aws_ebs_volume.data` וההצמדה שלו | `gp3` של 300 GB | מסד הנתונים; נפרד כדי שאפשר יהיה להחליף את המכונה תחתיו |
 | `aws_cloudfront_distribution.api` | CDN, TTL ברירת מחדל 300 שניות | מקשה את מחרוזות השאילתה החוזרות שהפרונטאנד שולח, וכך חוסם egress |
-| `aws_security_group.api` | 80/443 פתוחים, SSH מ-`var.ssh_cidr` | ל-`ssh_cidr` אין ברירת מחדל בכוונה |
+| `aws_security_group.api` | פורט 80 נכנס, שום דבר אחר | אין זוג מפתחות, ולכן אין מה שפורט 22 יכניס |
 | `aws_iam_role.instance` ומדיניות SSM | instance profile | גישת shell דרך SSM, ולכן אין מפתח לנהל |
 | `infra/bootstrap.sh` כ-`user_data` | מתקין ClickHouse, Node, הסכמה, שרשרות ה-ingest וה-cron של GTFS | מכונה שעלתה מגישה את ה-API בלי שום צעד נוסף |
 | `aws_budgets_budget.monthly` | מתריע ב-50, 80 ו-100 אחוז מ-`budget_usd` | הכשל היחיד כאן שאינו בר-שחזור הוא כסף |
@@ -306,7 +306,7 @@ ECS או Fargate היו מוסיפים שכבת תזמור סביב תהליך �
 ```bash
 cd infra
 terraform init
-terraform apply -var ssh_cidr=YOUR.IP.ADDR.0/32 -var budget_email=you@example.org
+terraform apply -var budget_email=you@example.org
 ```
 
 ה-bootstrap אידמפוטנטי חוץ מיצירת מערכת הקבצים, שמוגנת ב-`blkid`: כרך הדאטא חי אחרי המכונה,

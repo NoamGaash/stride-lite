@@ -312,7 +312,7 @@ that never needs rescheduling. `infra/main.tf` provisions:
 | `aws_instance.app` | one `m7g.large`, 20 GB root | runs ClickHouse **and** the API |
 | `aws_ebs_volume.data` + attachment | 400 GB `gp3` | the database; separate so the instance can be replaced under it |
 | `aws_cloudfront_distribution.api` | CDN, 300 s default TTL | caches the repeated query strings the frontend issues, which bounds egress |
-| `aws_security_group.api` | 80/443 open, SSH from `var.ssh_cidr` | `ssh_cidr` has no default on purpose |
+| `aws_security_group.api` | port 80 in, nothing else | there is no key pair, so there is nothing for port 22 to admit |
 | `aws_iam_role.instance` + SSM policy | instance profile | shell access via SSM, so no key to manage |
 | `infra/bootstrap.sh` as `user_data` | installs ClickHouse, Node, the schema, the ingest chains and the GTFS cron | a launched instance serves the API with no further steps |
 | `aws_budgets_budget.monthly` | alerts at 50/80/100% of `budget_usd` | the only unrecoverable failure here is spend |
@@ -320,7 +320,7 @@ that never needs rescheduling. `infra/main.tf` provisions:
 ```bash
 cd infra
 terraform init
-terraform apply -var ssh_cidr=YOUR.IP.ADDR.0/32 -var budget_email=you@example.org
+terraform apply -var budget_email=you@example.org
 ```
 
 The bootstrap is idempotent except for creating the filesystem, which is guarded by `blkid`:

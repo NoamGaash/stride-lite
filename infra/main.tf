@@ -32,11 +32,6 @@ variable "data_volume_gb" {
   default     = 400
 }
 
-variable "ssh_cidr" {
-  description = "CIDR allowed to reach SSH. Narrow this; it is not defaulted on purpose."
-  type        = string
-}
-
 variable "branch" {
   description = "Branch of NoamGaash/stride-lite the instance bootstraps from."
   type        = string
@@ -66,7 +61,7 @@ data "aws_ami" "al2023_arm" {
 
 resource "aws_security_group" "api" {
   name        = "stride-lite-api"
-  description = "stride-lite: public API in, SSH from an allowed range only"
+  description = "stride-lite: public API in, nothing else"
 
   ingress {
     description = "API"
@@ -74,14 +69,6 @@ resource "aws_security_group" "api" {
     to_port     = 80
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "SSH"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = [var.ssh_cidr]
   }
 
   egress {
