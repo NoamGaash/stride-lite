@@ -70,6 +70,9 @@ jobs:
             exit 1
           }
 
+      - name: Apply the GTFS staging schema
+        run: ./clickhouse client --database stride --multiquery < ingest/gtfs-staging.sql
+
       - name: Expect the enrichment to be idempotent on an empty feed
         run: |
           ./clickhouse client --database stride --multiquery < ingest/enrich-once.sql

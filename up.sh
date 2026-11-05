@@ -55,6 +55,15 @@ $CH --database "$CH_DB" --multiquery < ingest/siri.sql
 $CH --database "$CH_DB" --multiquery < ingest/enrich.sql
 echo "refreshable views created; they schedule themselves from here"
 
+say "GTFS, yesterday's feed"
+# The one piece that needs something outside the database: ClickHouse cannot
+# read a multi-file zip, so the feed has to be fetched and unpacked by a shell.
+# A line in cron keeps it current:
+#
+#   17 4 * * *  cd /path/to/stride-lite && CH_DB=stride ./ingest/gtfs.sh
+#
+CH_DB="$CH_DB" CH_CLIENT="$CH" ./ingest/gtfs.sh || echo "   GTFS load failed; SIRI is unaffected"
+
 if [ "$HOURS" -gt 0 ]; then
   say "backfilling $HOURS hour(s)"
   # Oldest first: a ride's scheduled_start_time is taken from its earliest

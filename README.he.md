@@ -215,7 +215,7 @@ flowchart TB
     S3S -->|"ingest/siri.sql<br/>REFRESH EVERY 1 MINUTE<br/>1 h of snapshots in 5-6 s"| RAW
     DUMP -->|"scripts/load-from-dump.sh<br/>one-time bootstrap<br/>13.7 b rows"| TYPED
     DUMP --> GTFS
-    S3G -.->|"daily GTFS refresh<br/>NOT BUILT"| GTFS
+    S3G -->|"ingest/gtfs.sh + gtfs.sql<br/>one day in 35 s<br/>the only step needing cron"| GTFS
     RAW -->|"ingest/enrich.sql<br/>6 chained refreshable views<br/>976,688 readings in 1.6 s"| TYPED
 
     TYPED --> API["stride-lite API<br/>TypeScript, 20 of 27 endpoints"]
@@ -256,7 +256,7 @@ flowchart TB
 | איסוף SIRI | ה-`open-bus-siri-requester` הקיים, ללא שינוי | אין |
 | ingest של SIRI → טבלה גולמית | ClickHouse `s3()` ועוד materialized view מתרענן | [`ingest/siri.sql`](ingest/siri.sql) — 3 אובייקטים, בלי scheduler |
 | מהגולמי לטבלאות המוקלדות של ה-API | 6 views מתרעננים בשרשרת, מסודרים ב-`DEPENDS ON` | [`ingest/enrich.sql`](ingest/enrich.sql) |
-| רענון יומי של GTFS | shell: curl, unzip, `clickhouse-client` | **לא נבנה** |
+| רענון יומי של GTFS | shell: curl, unzip, `clickhouse-client`, ואז SQL | [`ingest/gtfs.sh`](ingest/gtfs.sh) ועוד [`ingest/gtfs.sql`](ingest/gtfs.sql) |
 | תזמון | `REFRESH EVERY` של ClickHouse | **אין** |
 | ניטור | `system.view_refreshes` | **אין** |
 | API | TypeScript | השירות היחיד |
@@ -333,6 +333,44 @@ view אינקרמנטלי שמתחזק אותה מהנתונים עצמם, וש�
 `system.view_refreshes` מדווח `status`, `next_refresh_time`, `written_rows` ו-`exception` —
 בדיוק הנראות שבגללה יש Airflow, בתוך מסד הנתונים.
 
+### GTFS, החצי השני של הפיד
+
+[`ingest/gtfs.sh`](ingest/gtfs.sh) טוען יום מארכיון ה-GTFS הציבורי, ו-[`ingest/gtfs.sql`](ingest/gtfs.sql)
+גוזר ממנו את `gtfs_route`, `gtfs_stop`, `gtfs_stop_mot_id`, `gtfs_ride` ו-`gtfs_ride_stop`.
+**יום אחד לוקח 35 שניות**, מול 1,580 שורות הפייתון שעושות את זה במקור.
+
+**זה הדבר היחיד שצריך scheduler**, ולהעמיד פנים אחרת יהיה לא כנה: ClickHouse קורא מ-S3 ישירות
+אבל אינו יודע לקרוא zip מרובה-קבצים, אז את הפיד צריך להוריד ולפרוס ב-shell. שורה אחת ב-cron,
+ו-`up.sh` עושה את הטעינה הראשונה.
+
+אומת מול הפרודקשן על 20/05/2026, תאריך ששני המסדים מחזיקים:
+
+| | |
+| --- | --- |
+| מסלולים | **6,423 מול 6,423**, וכל שדה זהה |
+| תחנות | **30,417 מול 30,417** |
+| נסיעות משותפות | 7,423, ו-`start_time`, `end_time` והמסלול כולם זהים |
+| עצירות משותפות | **242,921, וכל שדה זהה** |
+
+כדי להגיע לשם היה צריך לשחזר שלוש התנהגויות במקור שהן באגים ולא תכנון, ושמימוש מחדש "מתקן"
+אותן בשקט ולכן טועה:
+
+- **`route_short_name` ריק נשמר כמחרוזת `"NaN"`.** הוא מגיע למסד דרך pandas כ-float NaN ונכתב
+  כ-`str()` שלו. 596 מתוך 6,423 מסלולים.
+- **תחנה מקבלת שורה לכל `stop_id`, לא לכל `stop_code`.** הטוען ממפתח את המטמון שלו לפי code
+  אבל לעולם לא מכניס אליו תחנה חדשה, אז code חוזר מוסיף שורה שוב. זה בדיוק הפער של 551 שורות
+  בין 30,417 מזהי תחנה פעילים ל-29,866 קודים.
+- **`shape_dist_traveled` של 0 הופך ל-NULL**, כי המקור בודק `if not value` ו-`not 0.0` הוא אמת
+  בפייתון. 6,827 מתוך 242,921 שורות.
+
+כל אחת מהן משוחזרת ולא מתוקנת. מיגרציה שמשנה בשקט את מה שה-API מחזיר אינה מיגרציה, והן רשומות
+ב-[FINDINGS.he.md](docs/FINDINGS.he.md) כדי שיתוקנו בכוונה.
+
+**דבר אחד שאי אפשר לשחזר**, והסיבה היא של המקור ולא שלנו: התוכן של הפרודקשן לתאריך עבר אינו
+פונקציה של אף פיד יחיד. הנסיעות שלו ל-20/05/2026 הן תערובת של שתי גרסאות פיד — 115,060 נסיעות
+עם הסיומת של הפיד מ-19/05 ו-6,838 עם זו של 20/05 — כי הטוען עושה upsert ולעולם לא מוחק, אז כל
+הרצה חוזרת משאירה שכבה. טעינה של כל יום מהפיד שלו, כפי שנעשה כאן, נותנת תשובה אחת עקבית.
+
 **TypeScript ב-API בכוונה**, לא לפי טעם: ה-client הנוצר
 `@hasadna/open-bus-api-client` וה-[פרונטאנד](https://github.com/hasadna/open-bus-map-search)
 כבר כתובים ב-TypeScript, כך שהטיפוסים משותפים מקצה לקצה.
@@ -360,8 +398,8 @@ docs/             BENCHMARKS.md (הדוח המלא), LOCAL-DB.md
 
 ## הסתייגויות, בכוונה בגוף ה-README
 
-- **טבלאות ה-GTFS עדיין קפואות בדאמפ.** SIRI זורם מקצה לקצה; הרענון היומי מ-`gtfs_archive/`
-  לא נבנה, ולכן מסלולים ותחנות מתיישנים.
+- **GTFS צריך cron, SIRI לא.** ClickHouse קורא מ-S3 לבדו אבל אינו יודע לקרוא zip מרובה-קבצים,
+  אז את פיד ה-GTFS מוריד סקריפט shell בטיימר יומי. זה הדבר המתוזמן היחיד במערכת.
 - **61 שורות בדקה שנמדדה עדיין נבדלות** מהפרודקשן ב-`siri_ride__scheduled_start_time`, ברכב
   אחד עם journey ref מסוג סנטינל, והסיבה אינה מובנת.
 - הגיבוי הציבורי הוא **בן 4.6 חודשים** — `Last-Modified: 2026-06-14`, והנתונים בתוכו

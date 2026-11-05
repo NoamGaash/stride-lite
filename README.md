@@ -205,7 +205,7 @@ flowchart TB
     S3S -->|"ingest/siri.sql<br/>REFRESH EVERY 1 MINUTE<br/>1 h of snapshots in 5-6 s"| RAW
     DUMP -->|"scripts/load-from-dump.sh<br/>one-time bootstrap<br/>13.7 b rows"| TYPED
     DUMP --> GTFS
-    S3G -.->|"daily GTFS refresh<br/>NOT BUILT"| GTFS
+    S3G -->|"ingest/gtfs.sh + gtfs.sql<br/>one day in 35 s<br/>the only step needing cron"| GTFS
     RAW -->|"ingest/enrich.sql<br/>6 chained refreshable views<br/>976,688 readings in 1.6 s"| TYPED
 
     TYPED --> API["stride-lite API<br/>TypeScript, 20 of 27 endpoints"]
@@ -244,7 +244,7 @@ All three paths were checked against S3 on 2026-11-04: the dump still answers
 | SIRI collection | the existing `open-bus-siri-requester`, unchanged | none |
 | SIRI ingest → raw table | ClickHouse `s3()` + refreshable materialized view | [`ingest/siri.sql`](ingest/siri.sql) — 3 objects, no scheduler |
 | raw → the API's typed tables | 6 chained refreshable views, ordered by `DEPENDS ON` | [`ingest/enrich.sql`](ingest/enrich.sql) |
-| GTFS daily refresh | shell: curl, unzip, `clickhouse-client` | **not built** |
+| GTFS daily refresh | shell: curl, unzip, `clickhouse-client`, then SQL | [`ingest/gtfs.sh`](ingest/gtfs.sh) + [`ingest/gtfs.sql`](ingest/gtfs.sql) |
 | Scheduling | ClickHouse `REFRESH EVERY` | **none** |
 | Monitoring | `system.view_refreshes` | **none** |
 | API | TypeScript | the only service |
@@ -321,6 +321,47 @@ the granularity upstream processes at and the same one the ingest already used.
 `written_rows` and `exception` — the visibility Airflow is there to provide, inside the
 database.
 
+### GTFS, the other half of the feed
+
+[`ingest/gtfs.sh`](ingest/gtfs.sh) loads a day of the published GTFS archive and
+[`ingest/gtfs.sql`](ingest/gtfs.sql) derives `gtfs_route`, `gtfs_stop`, `gtfs_stop_mot_id`,
+`gtfs_ride` and `gtfs_ride_stop` from it. **One day takes 35 seconds**, against the 1,580 lines
+of Python that do it upstream.
+
+**It is the one thing that needs a scheduler**, and pretending otherwise would be dishonest:
+ClickHouse reads S3 directly but cannot read a multi-file zip, so the feed has to be fetched
+and unpacked by a shell. One line of cron, and `up.sh` does the first load.
+
+Verified against production on 2026-05-20, which both databases hold:
+
+| | |
+| --- | --- |
+| Routes | **6,423 vs 6,423**, and every field identical |
+| Stops | **30,417 vs 30,417** |
+| Rides present in both | 7,423, and `start_time`, `end_time` and route all identical |
+| Ride stops present in both | **242,921, and every field identical** |
+
+Getting there meant reproducing three upstream behaviours that are bugs, not design, and that
+a reimplementation silently gets "right" and therefore wrong:
+
+- **An empty `route_short_name` is stored as the literal string `"NaN"`.** It reaches the
+  database through pandas as a float NaN and is written as its `str()`. 596 of 6,423 routes.
+- **A stop gets one row per `stop_id`, not per `stop_code`.** The loader keys its cache by
+  code but never puts a newly-created stop into that cache, so a repeated code inserts again.
+  That is exactly the 551-row gap between 30,417 active stop_ids and 29,866 codes.
+- **A `shape_dist_traveled` of 0 becomes NULL**, because upstream guards with
+  `if not value` and `not 0.0` is true in Python. 6,827 of 242,921 rows.
+
+Each is reproduced rather than corrected. A migration that quietly changes what the API
+returns is not a migration, and these belong in [FINDINGS.md](docs/FINDINGS.md) to be fixed
+deliberately instead.
+
+**One thing it cannot reproduce**, and the reason is upstream's and not ours: production's
+content for a past date is not a function of any single feed. Its rides for 2026-05-20 are a
+mix of two feed versions — 115,060 trips carrying the 19/05 feed's suffix and 6,838 carrying
+the 20/05 one — because the loader upserts and never deletes, so each re-run leaves its layer
+behind. Loading each day from its own feed, as this does, gives one consistent answer instead.
+
 **TypeScript for the API on purpose**, not by taste: the generated client
 `@hasadna/open-bus-api-client` and the [frontend](https://github.com/hasadna/open-bus-map-search)
 are already TypeScript, so types are shared end to end.
@@ -347,8 +388,9 @@ The directory boundaries are kept clean from day one so that split is mechanical
 
 ## Honest caveats
 
-- **The GTFS tables are still frozen at the dump.** SIRI flows end to end; the daily GTFS
-  refresh from `gtfs_archive/` is not built, so routes and stops age.
+- **GTFS needs cron, SIRI does not.** ClickHouse reads S3 by itself but cannot read a
+  multi-file zip, so the GTFS feed is fetched by a shell script on a daily timer. It is the
+  only scheduled thing in the system.
 - **61 rows in a measured minute still differ** from production in
   `siri_ride__scheduled_start_time`, for one vehicle with a sentinel journey ref, and the
   cause is not understood.

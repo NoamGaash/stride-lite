@@ -163,6 +163,46 @@ Any client that re-sorts this list locally will disagree with the API.
 
 ---
 
+## 10. Three bugs in the GTFS loader, found by reproducing it
+
+Each is small, each is in the API's output today, and each is the kind a reimplementation
+quietly "fixes" and therefore gets wrong. Measured on 2026-05-20.
+
+**An empty `route_short_name` is stored as the string `"NaN"`.** The feed leaves it blank for
+trains and a few bus lines; pandas reads a blank CSV field as a float NaN, and SQLAlchemy
+writes its `str()` into a text column. **596 of 6,423 routes** that day carry the literal
+`NaN`, and the API returns it.
+
+**A stop gets one row per `stop_id` instead of one per `stop_code`.** In
+`open_bus_gtfs_etl/load_stops_to_db.py` the cache `gtfs_stops_by_code` is read in both
+branches but only ever written in the `if`, never in the `else` that creates a stop. So the
+second feed row carrying a code already created in this run misses the cache and inserts
+again. On 2026-05-20 that is **30,417 rows for 29,866 distinct codes** — stop code 2463 has
+five identical rows, same name, same city, same coordinates. `/gtfs_stops/list` returns them
+all.
+
+**A `shape_dist_traveled` of zero is stored as NULL.** The guard is
+`if not row['shape_dist_traveled'] or numpy.isnan(...)`, and `not 0.0` is true in Python, so a
+genuine zero takes the same path as a missing value. **6,827 of 242,921** stop times.
+
+None of the three loses data, and all three are easy to fix. They are listed because anyone
+rebuilding this will produce different output without them, and will be right to wonder which
+side is wrong.
+
+## 11. A GTFS date is not a function of one feed
+
+Production's rows for a past date accumulate across feed versions, because the loader upserts
+and never deletes. Its `gtfs_ride` rows for 2026-05-20 carry two different feed suffixes:
+**115,060 from the feed published 2026-05-19 and 6,838 from 2026-05-20's**. Each ETL run left
+its layer.
+
+That makes a past date unreproducible from the archive alone — not wrong, but worth knowing
+before anyone tries to verify a rebuild against it. Rides present in both do match exactly:
+7,423 of them, with identical `start_time`, `end_time` and route, and 242,921 ride stops with
+every field identical.
+
+---
+
 ## Reporting these
 
 These are observations from outside, and some may have a reason we cannot see
