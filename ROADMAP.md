@@ -2,7 +2,7 @@
 
 [עברית](ROADMAP.he.md)
 
-Where this is, what is left, and what was deliberately left out. Status as of 2026-11-04.
+Where this is, what is left, and what was deliberately left out. Status as of 2026-11-05.
 
 Cost estimates are built from published AWS and Kamatera rates and are in
 [docs/BENCHMARKS.md](docs/BENCHMARKS.md); what the project pays today is not — see the note
@@ -23,10 +23,10 @@ Three, set at the start, unchanged since:
 | | Stage | Gate | Status |
 | --- | --- | --- | --- |
 | 1 | Run the org's existing ClickHouse stack | migrations apply, dbt models build, `ALIAS` columns return correct values | **done** |
-| 2 | GTFS ingest — the blocking gap | GTFS tables in ClickHouse, both enrichment macros off `postgresql()` | **partly** |
-| 3 | The remaining ETL processes | no Airflow, `system.view_refreshes` clean for 24 h | **SIRI ingest and enrichment done**, rest not started |
+| 2 | GTFS ingest — the blocking gap | GTFS tables in ClickHouse, both enrichment macros off `postgresql()` | **done** |
+| 3 | The remaining ETL processes | no Airflow, `system.view_refreshes` clean for 24 h | **done**, except a 24 h unattended run |
 | 4 | The TypeScript API | 27 of 27 endpoints identical to production | **done** |
-| 5 | Pricing and deployment | measured resources, priced under the $150/month target | not started |
+| 5 | Pricing and deployment | measured resources, priced under the $150/month target | **priced: $3.24/day, $98/month.** Not deployed |
 
 ### Stage 1 — done
 
@@ -41,20 +41,35 @@ Three things it turned up:
   already declared as zero-storage `ALIAS` columns in the org's own schema.
 - The enrichment computations measure at 26–87 ms. The work itself is not the expensive part.
 
-### Stage 2 — in progress
+### Stage 2 — done
 
 The source is public and current: `s3://openbus-stride-public/gtfs_archive/YYYY/MM/DD/`,
-updated daily. `israel-public-transportation.zip` is 170 MB/day and holds a 968 MB
-`stop_times.txt` uncompressed. ClickHouse cannot read a multi-file zip, so the step is curl,
-unzip, `INSERT … FORMAT CSVWithNames` — about fifteen lines of shell.
+updated daily. ClickHouse cannot read a multi-file zip, so [`ingest/gtfs.sh`](ingest/gtfs.sh)
+is curl, unzip and `INSERT … FORMAT CSVWithNames`, and
+[`ingest/gtfs.sql`](ingest/gtfs.sql) derives the five GTFS tables from the staged text.
+**One day in 35 s.** It is the only step in the system that needs a scheduler.
+
+Verified field by field against production on 2026-05-20, a date both databases hold:
+
+| | |
+| --- | --- |
+| Routes | **6,423 vs 6,423**, every field identical |
+| Stops | **30,417 vs 30,417** |
+| Rides in common | 7,423, identical `start_time`, `end_time` and route |
+| Ride stops in common | **242,921, every field identical** |
+
+Reaching that meant reproducing three upstream bugs rather than fixing them — an empty
+`route_short_name` stored as the string `"NaN"`, one stop row per `stop_id` instead of per
+`stop_code`, and a `shape_dist_traveled` of zero stored as NULL. They are findings 10 and 11
+in [docs/FINDINGS.md](docs/FINDINGS.md), because a migration that silently changes what the
+API returns is not a migration.
 
 **A modelling hypothesis that turned out to be wrong, and is recorded because the conclusion
 survived it.** GTFS defines `stop_times` once per feed version per trip, not per date, so the
 guess was that the 4.11 billion `gtfs_ride_stop` rows could be expanded at read time against
 `calendar.txt`. Measured: 1595 days × 18.28M `stop_times` rows is **29 billion rows**, seven
 times worse than storing them. PostgreSQL's data model is right; it simply pays about 50× in
-bytes for it. Materialising the expansion is both cheaper and simpler than query-time
-calendar expansion, which would also have to re-derive service dates on every request.
+bytes for it.
 
 ### Stage 4 — done, 27 of 27
 
@@ -129,18 +144,38 @@ Two contract rules came out of that comparison, both of which the first attempt 
 `…-0`. Production reports a departure time that appears nowhere in six hours of the feed, so
 the cause is upstream ETL behaviour that has not been read yet. Open.
 
-Also still to build in this stage: the **daily GTFS refresh** from `gtfs_archive/` (SIRI is
-current, GTFS still ages from the dump), validate-snapshots, the ride aggregations
-(`gtfs_rides_agg`, `gtfs_rides_agg_by_hour`), and the packagers.
+The **daily GTFS refresh** is now built (stage 2). `gtfs_rides_agg_by_hour` is a table rebuilt
+by a refreshable view. Still not built and judged unnecessary until something asks for them:
+validate-snapshots, which is a `count` comparison rather than a process, and the packagers.
 
-### Stage 5 — not started
+**Availability is deliberately not engineered**, and that is the project's own call rather than
+a shortcut. The Python requesters keep writing to S3 whatever happens here, both loaders are
+idempotent, and everything in ClickHouse is derived — so a node that has been dark for a week
+catches up in 41 minutes for SIRI and 35 s per missed GTFS day. The database is a cache, not a
+system of record. Hence no snapshots, no failover and no health alarms anywhere in `infra/`.
+Spend is the one thing that cannot be recovered after the fact, so spend is the one thing
+alarmed.
 
-Measure RSS and CPU under continuous ingest plus refresh — the steady state is the figure
-that matters, not a single query. The current estimate from published AWS rates is **~$96/month**
-in eu-west-1 — one `m7g.large` running both ClickHouse and the API, a 300 GB `gp3` volume and
-CloudFront — against a $150 target, or about $75 on a one-year reserved rate. Measured peak
-query memory was ≤25 MB, so 8 GB is not optimistic. Full breakdown and the tradeoffs in
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Then deploy via the Terraform module in `infra/`.
+### Stage 5 — priced, not deployed
+
+**$3.24 a day, $98.48 a month in eu-west-1**, on rates taken from AWS's own price list
+(effective 2026-11-01) and regenerated by `scripts/fetch-rates.sh` into
+[infra/rates.json](infra/rates.json) rather than transcribed. Against the $150 target, and
+$76 on a one-year no-upfront reservation.
+
+Compute is **67%** of that and disk 29%; ingest, enrichment, scheduling and the CDN together
+are under 0.3%. So the only lever that moves the bill is whether the machine is on: five hours
+a week is **$34/month, 83% of it the disk of a switched-off machine.**
+
+`infra/` now provisions a bootable node — `bootstrap.sh` as `user_data` installs ClickHouse,
+Node, the schema, the ingest chains and the single GTFS cron entry — plus a budget alarm.
+
+**Two things remain.** RSS and CPU under 24 hours of continuous ingest, which is the figure a
+deployment should be sized on. And real traffic volume, the one input the cost model lacks:
+the plan is to point the frontend at the deployment for a few days. That measurement has a
+trap, documented in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) — CloudFront's permanent free
+tier means the invoice will read $0 for egress, so `scripts/measure-cost.py` reads the bytes
+from CloudWatch and prices them instead.
 
 ## Deliberately out of scope
 
@@ -180,11 +215,15 @@ a rewrite.
   from production at all.
 - **The `siri_ride_stop` projection is predicted, not measured.** The 0.015 s figure above is
   measured on `gtfs_ride_stop`; the second one is inferred from it.
-- **`siri_ride_stop` is now maintained; `gtfs_ride_stop` is not.** The SIRI chain keeps the
-  first current, but nothing refreshes GTFS, so routes and stops age from the dump.
+- **`gtfs_ride_stop` is loaded but not refreshed.** The daily GTFS loader replaces the other
+  GTFS tables; this one is a quarter of the database on its own and still dates from the dump.
 - **61 rows in a measured minute still differ from production** in `scheduled_start_time`,
   cause unknown — see stage 3.
-- **The public dump is 4.6 months old**, which bounds every differential test case.
+- **Nothing has run unattended for 24 hours.** The chain has been observed healthy repeatedly,
+  but a full day of steady-state RSS and CPU is the number stage 5 should be sized on and it
+  does not exist yet.
+- **The public dump is 4.6 months old**, which bounds every differential test case that
+  predates continuous ingest.
 
 ## On cost
 

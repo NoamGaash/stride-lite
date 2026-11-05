@@ -73,6 +73,17 @@ jobs:
       - name: Apply the GTFS staging schema
         run: ./clickhouse client --database stride --multiquery < ingest/gtfs-staging.sql
 
+      - name: Apply the projections
+        # They are 30% of the footprint and the difference between 44 s and
+        # 0.016 s on two endpoints, so a projection that stops applying is a
+        # silent regression rather than an error.
+        run: ./clickhouse client --database stride --multiquery < db/projections.sql
+
+      - name: Expect every projection to be registered
+        run: |
+          n=$(./clickhouse client --query "SELECT count() FROM system.projections WHERE database='stride'")
+          test "$n" = 4 || { echo "got $n projections, want 4"; exit 1; }
+
       - name: Expect the enrichment to be idempotent on an empty feed
         run: |
           ./clickhouse client --database stride --multiquery < ingest/enrich-once.sql

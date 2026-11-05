@@ -1,4 +1,6 @@
 import { createServer } from 'node:http'
+import { gzip } from 'node:zlib'
+import { promisify } from 'node:util'
 import { query, scalar, lit, ClickHouseError } from './ch'
 import { buildQuery, BadRequest, BadInput, TzRequired, UnknownOrderField } from './sql'
 import { endpoints, getEndpoints } from './registry'
@@ -68,31 +70,56 @@ function normalize(row: Record<string, unknown>): Record<string, unknown> {
 const SETTINGS =
   'SETTINGS output_format_json_quote_64bit_integers = 0, join_use_nulls = 1'
 
+const gzipAsync = promisify(gzip)
+
+/**
+ * Below this, the header costs more than the compression saves.
+ */
+const MIN_GZIP_BYTES = 1024
+
+/**
+ * CloudFront's automatic compression only applies to an origin response that
+ * carries `Content-Length`, and Node sends a bare `res.end(text)` chunked. So
+ * these responses would reach every viewer uncompressed: measured 33,349 bytes
+ * against 3,075 gzipped on one 100-row response, which is the egress bill off
+ * by a factor of ten. Compressing at the origin fixes it whatever the CDN does,
+ * and CloudFront passes an already-encoded body straight through.
+ */
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
-  const send = (status: number, body: unknown) => {
+  const wantsGzip = /\bgzip\b/.test(req.headers['accept-encoding'] ?? '')
+  const send = async (status: number, body: unknown) => {
     const text = typeof body === 'string' ? body : JSON.stringify(body)
-    res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' })
-    res.end(text)
+    const raw = Buffer.from(text, 'utf-8')
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json; charset=utf-8',
+      Vary: 'Accept-Encoding',
+    }
+    const payload =
+      wantsGzip && raw.length >= MIN_GZIP_BYTES ? await gzipAsync(raw) : raw
+    if (payload !== raw) headers['Content-Encoding'] = 'gzip'
+    headers['Content-Length'] = String(payload.length)
+    res.writeHead(status, headers)
+    res.end(payload)
   }
 
   try {
-    if (url.pathname === '/healthz') return send(200, { ok: true })
+    if (url.pathname === '/healthz') return await send(200, { ok: true })
 
     const listDef = byPath.get(url.pathname)
     if (listDef) {
       const { sql, isCount } = buildQuery(listDef, url.searchParams)
-      if (isCount) return send(200, await scalar(sql))
+      if (isCount) return await send(200, await scalar(sql))
       const rows = await query(`${sql} ${SETTINGS}`)
-      return send(200, rows.map(normalize))
+      return await send(200, rows.map(normalize))
     }
 
     const rawDef = rawByPath.get(url.pathname)
     if (rawDef) {
       const { sql, isCount } = wrap(rawDef, rawDef.build(url.searchParams, DB), url.searchParams)
-      if (isCount) return send(200, await scalar(sql))
+      if (isCount) return await send(200, await scalar(sql))
       const rows = await query(`${sql} ${SETTINGS}`)
-      return send(200, rows.map((r) => shapeRow(rawDef, normalize(r))))
+      return await send(200, rows.map((r) => shapeRow(rawDef, normalize(r))))
     }
 
     const getDef = getByPath.get(url.pathname)
@@ -103,22 +130,22 @@ const server = createServer(async (req, res) => {
       const rows = await query(
         `SELECT ${select} FROM ${getDef.table} WHERE id = ${lit(Number(id))} LIMIT 1 ${SETTINGS}`,
       )
-      if (rows.length === 0) return send(404, { detail: 'Not Found' })
-      return send(200, normalize(rows[0]))
+      if (rows.length === 0) return await send(404, { detail: 'Not Found' })
+      return await send(200, normalize(rows[0]))
     }
 
-    return send(404, { detail: 'Not Found' })
+    return await send(404, { detail: 'Not Found' })
   } catch (err) {
-    if (err instanceof BadInput) return send(400, { detail: err.message })
-    if (err instanceof BadRequest) return send(422, { detail: err.message })
+    if (err instanceof BadInput) return await send(400, { detail: err.message })
+    if (err instanceof BadRequest) return await send(422, { detail: err.message })
     if (err instanceof TzRequired || err instanceof UnknownOrderField)
-      return send(500, { message: err.message })
+      return await send(500, { message: err.message })
     if (err instanceof ClickHouseError) {
       console.error('clickhouse error for sql:\n', err.sql, '\n', err.message)
-      return send(500, { detail: 'query failed' })
+      return await send(500, { detail: 'query failed' })
     }
     console.error(err)
-    return send(500, { detail: 'internal error' })
+    return await send(500, { detail: 'internal error' })
   }
 })
 

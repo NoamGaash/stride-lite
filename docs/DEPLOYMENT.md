@@ -6,22 +6,58 @@ Five questions, answered with what was measured. Anything not measured is labell
 
 ---
 
-## 1. What will it cost
+## 1. What it costs
 
-**One VM, one disk, a CDN in front. ~$105/month in eu-west-1.**
+**One VM, one disk, a CDN in front: $3.24 a day, $98 a month in eu-west-1.** Under the $150
+target, and under it on on-demand rates with nothing committed.
 
-| Resource | Size | Published rate | Monthly |
+Every rate below comes from AWS's own published price list, effective **2026-11-01**, and is
+checked into [infra/rates.json](../infra/rates.json). It is regenerated rather than
+transcribed:
+
+```bash
+./scripts/fetch-rates.sh          # pulls the offer files and rewrites infra/rates.json
+```
+
+An estimate nobody can re-derive is an estimate nobody should act on, which is why this is a
+script and not a paragraph.
+
+### A day, with the server always on
+
+| Service | What | Per day | Per month |
 | --- | --- | --- | --- |
-| EC2 `m7g.large` | 2 vCPU, 8 GB, Graviton | ~$0.091/h | **$66** |
-| EBS `gp3` data volume | 400 GB | ~$0.092/GB-mo | **$37** |
-| EBS `gp3` root volume | 20 GB | ~$0.092/GB-mo | **$2** |
-| CloudFront | first 1 TB/month | free tier | **$0** |
-| S3 reads | same-region | free | **$0** |
-| **Total** | | | **~$105** |
+| EC2 | `m7g.large`, 2 vCPU, 8 GB Graviton, 24 h | **$2.18** | $66.43 |
+| EBS | 300 GB `gp3`, the database | $0.87 | $26.40 |
+| EBS | 20 GB `gp3`, root | $0.06 | $1.76 |
+| VPC | one public IPv4 address | $0.12 | $3.65 |
+| S3 | ingest requests, ~1,440 LIST + ~1,430 GET a day | $0.01 | $0.24 |
+| CloudFront | inside the always-free 1 TB and 10 M requests | **$0** | $0 |
+| | | **$3.24** | **$98.48** |
 
-Reserve the instance for a year and it drops to roughly $45, putting the total near **$84**.
+A one-year no-upfront reservation on the instance takes it to **$2.50 a day, $76 a month**.
 
-**Why 400 GB.** Measured on the loaded database, with every projection built:
+### Where the money goes
+
+| | Share |
+| --- | --- |
+| Compute | **67%** |
+| Disk | 29% |
+| IPv4 address | 4% |
+| Everything else — S3, CDN, egress | **under 0.3%** |
+
+Two consequences, and both run against instinct.
+
+**The data pipeline is free.** Ingest, enrichment, scheduling and the CDN together are a
+third of one percent of the bill. There is nothing to optimise there, and no case for choosing
+a cheaper engine or a thriftier query. Reads of the archive are same-region and therefore
+free, which is the whole reason for picking eu-west-1.
+
+**The only lever that moves the number is whether the machine is on.** Not its size, not its
+software. See below.
+
+### Why 300 GB
+
+Measured on the loaded database, with every projection built:
 
 | | Size |
 | --- | --- |
@@ -32,93 +68,159 @@ Reserve the instance for a year and it drops to roughly $45, putting the total n
 | `siri_ride.by_natural_key` | 0.87 GiB |
 | **Total** | **233.02 GiB** |
 
-Projections are **30% of the footprint**, which is worth knowing before sizing a disk around
-the 164 GiB that the data alone occupies.
+Projections are **30% of the footprint**, worth knowing before sizing a disk around the
+164 GiB the data alone occupies. The live database measures **241.29 GiB** now that GTFS runs
+daily rather than ageing from the dump.
 
-**One of them can go.** `siri_ride_stop.by_gtfs_stop` exists only to make `/stop_arrivals/list`
-fast, and that endpoint cannot return a row from production for any input — see
-[FINDINGS.md](FINDINGS.md). Dropping it saves **19.33 GiB** and costs nothing anyone can
-observe, taking the requirement to **213.69 GiB**.
+**One projection can go.** `siri_ride_stop.by_gtfs_stop` exists only to make
+`/stop_arrivals/list` fast, and that endpoint cannot return a row from production for any
+input — see [FINDINGS.md](FINDINGS.md). Dropping it saves 19.33 GiB and costs nothing anyone
+can observe.
 
-EBS volumes grow online and never shrink, so there is no reason to buy the headroom up front.
-250 GB fits the reduced footprint; 400 GB buys roughly four years at the measured +36 GiB/year
-of base growth.
+EBS volumes grow online and never shrink, so there is no reason to buy headroom up front.
+300 GB fits today with room for about a year and a half at the measured +36 GiB/year.
 
-**Why one instance and not two:** ClickHouse's measured peak query memory was **≤25 MB** and
-the API is a stateless Node process. They fit on one box with room to spare. `infra/main.tf`
-provisions exactly one.
+**Why one instance and not two:** measured peak query memory was **≤25 MB** and the API is a
+stateless Node process. `infra/main.tf` provisions exactly one.
 
-Two honest caveats:
+### Day one
 
-- **The rates above are from AWS's published pricing pages and were not re-checked today.**
-  Verify before anyone commits to them.
-- **Egress above CloudFront's free 1 TB is the one unquantified risk.** It needs a real
-  traffic figure, which Cloudflare analytics would give. Everything else here is bounded.
+Two ways to get 241 GiB onto the machine, and the cheap one is also the fast one.
 
-What the project pays today is not in this repository — that figure was reported privately.
+| | AWS cost | Wall clock |
+| --- | --- | --- |
+| **Upload the built database** — `BACKUP … TO S3(…)` here, `RESTORE` there | **~$2** | bounded by your uplink: 35 min at 1 Gbps, 5.8 h at 100 Mbps |
+| **Rebuild from the public dump on the instance** | $7–18 | hours; 14 h measured locally on six throttled cores |
+
+Transfer **into** S3 is free, so the first path pays only for the backup sitting in S3 for a
+day or two (~$0.36), the multipart PUTs (~$0.08), and an hour or two of instance time. Its
+floor is EBS write throughput: `gp3` gives 125 MB/s at baseline, so 241 GiB cannot land in
+less than **35 minutes** however fast the uplink is.
+
+The second path needs no upload at all — the dump is in the same bucket and the same region,
+so reading it is free — but it re-parses 13.7 billion rows and then rebuilds the four
+projections, about 25 minutes each as measured locally. The instance type is decoupled from
+the volume, so this is the one job worth renting a `c7g.8xlarge` for at $1.24/h and then
+stopping.
+
+Either way **day one is not where the money is.** The recurring bill is.
 
 ### If the server is not on all the time
 
-A different question with a different answer, and the answer is counter-intuitive: **the disk
-is the bill and the compute is a rounding error.**
-
-Stopping an EC2 instance stops the compute charge. Everything attached keeps billing. For a
-server woken for about five hours a week — say a weekly working session — that is roughly
-21.7 hours of compute a month:
+A different question, with a counter-intuitive answer: **the disk is the bill and the compute
+is a rounding error.** Stopping an EC2 instance stops the compute charge; everything attached
+keeps billing. For a server woken about five hours a week — a weekly working session — that
+is roughly 21.7 hours of compute a month:
 
 | | Monthly |
 | --- | --- |
-| EBS `gp3` 250 GB, billed whether the instance runs or not | ~$22 |
-| EBS `gp3` root, 20 GB | ~$2 |
-| Public IPv4, billed even while the instance is stopped | ~$3.6 |
-| EC2 `m7g.large`, 21.7 h | **~$2** |
-| **Total** | **~$30** |
+| EBS `gp3`, 320 GB, billed whether the instance runs or not | $28.16 |
+| Public IPv4, billed even while the instance is stopped | $3.65 |
+| EC2 `m7g.large`, 21.7 h | **$1.97** |
+| **Total** | **$33.78** |
 
-Two things follow.
+**$34 a month, and 83% of it is the disk of a machine that is switched off.**
 
-**Size the instance up, not down.** Compute is under 7% of that bill. An `m7g.xlarge` with
-four cores costs about $4 a month instead of $2 and halves every wait. Choosing a small
-instance to save money saves nothing here.
-
-**The public IPv4 is avoidable.** `infra/main.tf` already attaches an SSM role, so the instance
-can be reached without one, for $3.6 less a month.
+Two things follow. **Size the instance up, not down** — compute is 6% of that bill, so an
+`m7g.xlarge` with four cores costs $4 instead of $2 and halves every wait. And **the public
+IPv4 is avoidable**: `infra/main.tf` already attaches an SSM role, so the instance can be
+reached without one, bringing it to **$30**.
 
 **Can five hours absorb a week of missed data?** Measured, ingest and enrichment together:
-**14.7 s per hour of feed** — 9.8 s to pull the snapshots from S3 and 4.9 s to derive the typed
-rows. A week is 168 hours of feed, so **about 41 minutes** on six throttled cores. Even
-assuming an `m7g.large` is three times slower, that is two hours of a five-hour window, and
-half of that on an `m7g.xlarge`.
+**14.7 s per hour of feed** — 9.8 s to pull the snapshots from S3 and 4.9 s to derive the
+typed rows. A week is 168 hours of feed, so **about 41 minutes** on six throttled cores. Even
+assuming an `m7g.large` is three times slower, that is two hours of a five-hour window.
 
 ### Keeping the history somewhere cheaper
 
 If all of it must be present — which it must, for this to be the same API — there are three
-shapes, and only one of them suits an intermittent server:
+shapes, and only one suits an intermittent server:
 
-| | Storage, 233 GiB | Cost of a session |
+| | Storage, 241 GiB | Cost of a session |
 | --- | --- | --- |
-| **EBS, always provisioned** | ~$21 at $0.088/GB-mo | none; full speed |
-| **ClickHouse reading S3 directly** | ~$5.6 at $0.024/GB-mo | every cold read is an HTTP GET, and a fresh instance has an empty cache |
-| **S3 cold, restored to EBS per session** | ~$5.6 plus EBS while running | 30–60 minutes of the session, every session |
-| **Tiered: recent on EBS, history on S3** | ~$9–12 | recent queries full speed, history slower |
+| **EBS, always provisioned** | $21.21 | none; full speed |
+| **ClickHouse reading S3 directly** | $5.54 | every cold read is an HTTP GET, and a fresh instance has an empty cache |
+| **S3 cold, restored to EBS per session** | $5.54 plus EBS while running | 35+ minutes of every session |
+| **Tiered: recent on EBS, history on S3** | $9–12 | recent queries full speed, history slower |
 
-Tiered storage is what ClickHouse is built for and the only one of these that keeps a
-five-hour session useful while cutting the bill roughly in half. EBS **snapshots** look like
-the obvious answer and are not: a volume restored from a snapshot loads its blocks lazily from
-S3, so the first reads are slow exactly when they are needed, and Fast Snapshot Restore costs
-far more than the storage it saves.
+Tiered storage is what ClickHouse is built for and the only one that keeps a five-hour session
+useful while roughly halving the bill. EBS **snapshots** look like the obvious answer and are
+not: a volume restored from a snapshot loads its blocks lazily from S3, so the first reads are
+slow exactly when they are needed, and Fast Snapshot Restore costs far more than the storage
+it saves.
 
-### Getting 233 GiB onto the machine in the first place
+### Availability is not a requirement here, and that is a design decision
 
-Loading the public dump on the instance takes **about 14 hours on six cores**, measured here,
-and an `m7g.large` has two — so a day or more. That is cheap rather than slow in the sense
-that matters: **the instance type is decoupled from the volume.** Rent a 32-core `c7g.8xlarge`
-for the load alone, which should be a few hours and a few dollars, then stop it and bring the
-same volume up under an `m7g.large`.
+Stated by the project, and it simplifies this deployment more than any technical choice in it:
+**the node may be down for days without anyone losing data.**
 
-Faster still, if the uplink allows it: `BACKUP DATABASE … TO S3(…)` here and `RESTORE` there
-copies a built database instead of re-parsing 13.7 billion rows, and skips rebuilding the four
-projections. 233 GiB is about 33 minutes at 1 Gbps and about 5.5 hours at 100 Mbps. Transfer
-into S3 is free.
+The reason is that the Python requesters — `open-bus-siri-requester` and the GTFS uploader —
+are untouched by this work and keep writing to `s3://openbus-stride-public` whatever happens
+here. S3 is the durable layer. **Everything in ClickHouse is derived**, and both loaders are
+idempotent by date and by snapshot, so a node that has been dark for a week catches up by
+reading forward: 41 minutes for the SIRI gap, 35 seconds per missed GTFS day.
+
+So the database on this instance is a **cache, not a system of record**, and this module
+deliberately contains:
+
+| Not here | Why |
+| --- | --- |
+| EBS snapshots or any backup | the source is in S3 and the derivation is 41 min/week |
+| A second instance, failover, a load balancer | downtime costs compute to recover, not data |
+| Health alarms, paging, an on-call path | nothing to be woken up for |
+| A budget alarm | **this one is here** — see below |
+
+The asymmetry is the point. Downtime is recoverable with compute; **money spent is not
+recoverable at all.** So `infra/main.tf` carries exactly one guard, `aws_budgets_budget`, at
+50%, 80% and 100% of a `budget_usd` that defaults to the project's own $150 target.
+
+What this does **not** cover: if the requesters stop, the archive stops, and nothing
+downstream can recover what was never collected. That is the one dependency this design
+genuinely has, and it lives in the existing infrastructure, not in this one.
+
+### Measuring a real run, which the bill will not do
+
+The plan is to point the frontend at this deployment for a few days and measure. Traffic
+volume is the one input the whole cost model lacks — everything else here is measured — so
+that is the right experiment. It has one trap.
+
+**CloudFront's free tier is permanent: the first 1 TB and the first 10 million requests every
+month.** A few days of real traffic will almost certainly fit inside it, so Cost Explorer will
+report **$0** for the CDN and the number actually being sought will never appear on the
+invoice.
+
+So measure the bytes, not the bill:
+
+```bash
+cd infra && terraform output measure_cost_command     # prints the line below, filled in
+scripts/measure-cost.py collect --distribution E… --instance i-… --days 3 > usage.json
+scripts/measure-cost.py price usage.json
+```
+
+`collect` reads `BytesDownloaded` and `Requests` from CloudWatch; `price` needs no credentials
+and reports the window, the projected month, and — the line that matters — **what the month
+would cost if the free tier did not exist.** That figure says whether the free tier is a
+ceiling this project will ever hit.
+
+For scale: a 100-row response is **3,249 bytes gzipped**, so 1 TB is about 350 million
+responses a month. If the map's responses are a hundred times larger, it is 3.5 million. The
+gap between those two numbers is the entire question, and only real traffic closes it.
+
+Three notes on running it:
+
+- **Compression first.** Production ships its JSON uncompressed, 11.1x larger than it needs to
+  be (finding 12). Measuring egress before fixing that measures the wrong system; this
+  implementation compresses at the origin.
+- **Pick representative days.** Benchmarking here was thrown off twice by sampling a Saturday
+  and a war week, both about 5x off.
+- **The fixed part is already exact.** Disk and instance are a flat line, known to the cent.
+  The experiment only adds the variable part, which is currently under 1% of the bill.
+
+Two caveats that remain:
+
+- `running_hours` in `usage.json` is assumed, not measured: CloudWatch publishes no "was
+  running" metric, so an instance stopped mid-window overstates its compute.
+- What the project pays today is not in this repository. That figure was reported privately.
 
 ---
 
@@ -212,12 +314,18 @@ that never needs rescheduling. `infra/main.tf` provisions:
 | `aws_cloudfront_distribution.api` | CDN, 300 s default TTL | caches the repeated query strings the frontend issues, which bounds egress |
 | `aws_security_group.api` | 80/443 open, SSH from `var.ssh_cidr` | `ssh_cidr` has no default on purpose |
 | `aws_iam_role.instance` + SSM policy | instance profile | shell access via SSM, so no key to manage |
+| `infra/bootstrap.sh` as `user_data` | installs ClickHouse, Node, the schema, the ingest chains and the GTFS cron | a launched instance serves the API with no further steps |
+| `aws_budgets_budget.monthly` | alerts at 50/80/100% of `budget_usd` | the only unrecoverable failure here is spend |
 
 ```bash
 cd infra
 terraform init
-terraform apply -var ssh_cidr=YOUR.IP.ADDR.0/32
+terraform apply -var ssh_cidr=YOUR.IP.ADDR.0/32 -var budget_email=you@example.org
 ```
+
+The bootstrap is idempotent except for creating the filesystem, which is guarded by `blkid`:
+the data volume outlives the instance, and reformatting it is the one destructive step in this
+repository.
 
 **Region: eu-west-1**, not by preference — the SIRI archive is already in that bucket, so
 ingest reads are same-region and therefore free. Running elsewhere adds inter-region transfer
@@ -258,17 +366,16 @@ all history once a minute.
 Honest status, so nobody deploys this expecting a finished system:
 
 - **27 of 27 endpoints** match production byte for byte, over 48 differential tests.
-- **`gtfs_ride_stop` has no ETL.** It is loaded and measured but not kept current, and it is
-  a quarter of the database on its own. `siri_ride_stop` is now maintained by the enrichment
-  chain.
-- **GTFS still ages from the dump.** SIRI flows end to end through
-  `ingest/siri.sql` → `ingest/enrich.sql` → the API, but the daily GTFS refresh from
-  `gtfs_archive/` is not built, and the enrichment macros still read GTFS out of PostgreSQL.
-- **61 rows in a measured minute differ from production** in `scheduled_start_time`, for one
-  vehicle with a sentinel journey ref. Cause not understood.
+- **The pipeline is complete.** SIRI flows `ingest/siri.sql` → `ingest/enrich.sql` → the API,
+  and GTFS loads a day in 35 s through `ingest/gtfs.sh`. The database holds 1,405 consecutive
+  days, 2023-01-01 to today.
+- **`gtfs_ride_stop` is loaded but not refreshed.** It is a quarter of the database on its own
+  and the daily GTFS loader replaces the rest of the GTFS tables, not this one.
+- **Nothing has run unattended for 24 hours.** Ingest and enrichment cost 14.7 s per hour of
+  feed, so a week of missed data takes about 41 minutes — but RSS and CPU held over a full day
+  of continuous running are unmeasured, and that is the number a deployment should be sized on.
+- **`/siri_velocity_aggregation` is not reproducible**, in production either — see
+  [FINDINGS.md](FINDINGS.md) finding 5.
 - **The `siri_ride_stop` projection is predicted, not measured.**
-- **Catch-up throughput is measured; a 24-hour steady state is not.** Ingest and enrichment
-  together cost 14.7 s per hour of feed, so a week of missed data takes about 41 minutes. RSS
-  and CPU held over a full day of continuous running are still unmeasured.
 
 [ROADMAP.md](../ROADMAP.md) tracks all of it.

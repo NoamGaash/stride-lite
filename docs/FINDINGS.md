@@ -201,6 +201,30 @@ before anyone tries to verify a rebuild against it. Rides present in both do mat
 7,423 of them, with identical `start_time`, `end_time` and route, and 242,921 ride stops with
 every field identical.
 
+## 12. The API does not compress anything
+
+Measured against production on 2026-11-04, asking for compression explicitly:
+
+```
+$ curl -H 'Accept-Encoding: gzip, deflate, br' \
+    '.../siri_vehicle_locations/list?limit=500&recorded_at_time_from=...'
+content-type: application/json
+content-length: 363063
+```
+
+No `content-encoding`, no `vary`. **363,063 bytes where gzip gives 32,719 — 11.1x.** JSON of
+repeated keys and numeric strings is close to the best case for a compressor, and this is the
+map's own endpoint, requested continuously by every open tab.
+
+The same gap appeared in this reimplementation, with a sharper edge: Node's `res.end(text)`
+sends `Transfer-Encoding: chunked`, and **CloudFront's automatic compression only applies to
+an origin response that carries `Content-Length`**. A CDN with `compress = true` would
+therefore have shipped every byte uncompressed and looked correctly configured. Fixed in
+`api/src/server.ts` by compressing at the origin and always setting the length.
+
+It costs nothing to fix on either side, and it is the cheapest tenfold improvement available
+anywhere in the stack --- in egress, in latency, and on mobile data.
+
 ---
 
 ## Reporting these

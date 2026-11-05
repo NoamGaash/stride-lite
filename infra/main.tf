@@ -37,6 +37,23 @@ variable "ssh_cidr" {
   type        = string
 }
 
+variable "branch" {
+  description = "Branch of NoamGaash/stride-lite the instance bootstraps from."
+  type        = string
+  default     = "main"
+}
+
+variable "budget_usd" {
+  description = "Monthly spend that triggers an alert. The project's own target is 150."
+  type        = number
+  default     = 150
+}
+
+variable "budget_email" {
+  description = "Where the budget alert goes. Not defaulted: an address does not belong in a public repo."
+  type        = string
+}
+
 data "aws_ami" "al2023_arm" {
   most_recent = true
   owners      = ["amazon"]
@@ -111,6 +128,9 @@ resource "aws_instance" "app" {
     volume_type = "gp3"
     encrypted   = true
   }
+
+  user_data                   = templatefile("${path.module}/bootstrap.sh", { branch = var.branch })
+  user_data_replace_on_change = false
 
   tags = {
     Name    = "stride-lite"
@@ -187,10 +207,54 @@ resource "aws_cloudfront_distribution" "api" {
   }
 }
 
+# The one guard this deployment needs. Availability deliberately has none: the
+# SIRI and GTFS requesters write to S3 independently of this node, so the
+# database here is a derived cache. Losing it for days costs compute to rebuild
+# and nothing else, which is why there are no snapshots, no failover and no
+# health alarms in this module. Spend is the only thing that cannot be
+# recovered after the fact, so spend is the only thing alarmed.
+resource "aws_budgets_budget" "monthly" {
+  name         = "stride-lite-monthly"
+  budget_type  = "COST"
+  limit_amount = var.budget_usd
+  limit_unit   = "USD"
+  time_unit    = "MONTHLY"
+
+  dynamic "notification" {
+    for_each = [50, 80, 100]
+    content {
+      comparison_operator        = "GREATER_THAN"
+      threshold                  = notification.value
+      threshold_type             = "PERCENTAGE"
+      notification_type          = "ACTUAL"
+      subscriber_email_addresses = [var.budget_email]
+    }
+  }
+}
+
 output "api_url" {
   value = "https://${aws_cloudfront_distribution.api.domain_name}"
 }
 
 output "instance_id" {
   value = aws_instance.app.id
+}
+
+output "cloudfront_distribution_id" {
+  value = aws_cloudfront_distribution.api.id
+}
+
+output "data_volume_id" {
+  value = aws_ebs_volume.data.id
+}
+
+# CloudFront's free tier means the bill will read zero for egress during a short
+# experiment, so the traffic has to be read from CloudWatch and priced by hand.
+output "measure_cost_command" {
+  value = join(" ", [
+    "scripts/measure-cost.py collect",
+    "--distribution ${aws_cloudfront_distribution.api.id}",
+    "--instance ${aws_instance.app.id}",
+    "--days 3 > usage.json && scripts/measure-cost.py price usage.json",
+  ])
 }

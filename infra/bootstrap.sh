@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# Brings a bare Amazon Linux 2023 arm64 instance up as a stride-lite node.
+# Runs as cloud-init user_data, so it runs once per instance launch, as root.
+#
+# Everything here is idempotent except the filesystem creation, which is
+# guarded: the data volume survives instance replacement, and reformatting it
+# would be the one genuinely destructive step in this repository.
+set -euxo pipefail
+
+DEV=/dev/nvme1n1          # the gp3 data volume; nvme naming on Graviton
+DATA=/var/lib/clickhouse
+REPO=/opt/stride-lite
+BRANCH=${branch}
+
+# ---- data volume -----------------------------------------------------------
+for _ in $(seq 1 60); do [ -b "$DEV" ] && break; sleep 2; done
+if ! blkid "$DEV" >/dev/null 2>&1; then
+  mkfs.ext4 -L stride-data "$DEV"
+fi
+mkdir -p "$DATA"
+grep -q "^LABEL=stride-data" /etc/fstab || echo "LABEL=stride-data $DATA ext4 defaults,noatime 0 2" >> /etc/fstab
+mount -a
+
+# ---- packages --------------------------------------------------------------
+dnf install -y git tar zstd unzip cronie
+systemctl enable --now crond
+curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
+dnf install -y nodejs
+
+curl -fsSL https://clickhouse.com/ | sh
+mv ./clickhouse /usr/local/bin/clickhouse
+useradd -r -s /sbin/nologin clickhouse || true
+chown -R clickhouse:clickhouse "$DATA"
+
+install -d -o clickhouse -g clickhouse /etc/clickhouse-server /var/log/clickhouse-server
+cat > /etc/clickhouse-server/config.xml <<'CFG'
+<clickhouse>
+    <path>/var/lib/clickhouse/</path>
+    <tmp_path>/var/lib/clickhouse/tmp/</tmp_path>
+    <user_files_path>/var/lib/clickhouse/user_files/</user_files_path>
+    <listen_host>127.0.0.1</listen_host>
+    <tcp_port>9000</tcp_port>
+    <http_port>8123</http_port>
+    <logger><level>warning</level><log>/var/log/clickhouse-server/clickhouse.log</log></logger>
+    <users_config>users.xml</users_config>
+    <default_profile>default</default_profile>
+</clickhouse>
+CFG
+cat > /etc/clickhouse-server/users.xml <<'USR'
+<clickhouse>
+    <profiles><default>
+        <max_memory_usage>6000000000</max_memory_usage>
+        <max_bytes_before_external_group_by>3000000000</max_bytes_before_external_group_by>
+    </default></profiles>
+    <users><default>
+        <password></password>
+        <networks><ip>127.0.0.1</ip></networks>
+        <profile>default</profile>
+        <quota>default</quota>
+        <access_management>1</access_management>
+    </default></users>
+    <quotas><default/></quotas>
+</clickhouse>
+USR
+
+cat > /etc/systemd/system/clickhouse.service <<'SVC'
+[Unit]
+Description=ClickHouse
+After=network.target
+[Service]
+User=clickhouse
+Group=clickhouse
+ExecStart=/usr/local/bin/clickhouse server --config-file=/etc/clickhouse-server/config.xml
+Restart=always
+LimitNOFILE=500000
+[Install]
+WantedBy=multi-user.target
+SVC
+systemctl daemon-reload
+systemctl enable --now clickhouse
+
+# ---- the repository --------------------------------------------------------
+git clone --branch "$BRANCH" --depth 1 https://github.com/NoamGaash/stride-lite "$REPO"
+cd "$REPO"
+(cd api && npm ci --omit=dev)
+
+for _ in $(seq 1 60); do clickhouse client --query 'SELECT 1' >/dev/null 2>&1 && break; sleep 2; done
+CH_CLIENT="clickhouse client" CH_DB=stride ./scripts/apply-schema.sh
+clickhouse client --database stride --multiquery < db/raw.sql
+clickhouse client --database stride --multiquery < db/projections.sql
+clickhouse client --database stride --multiquery < ingest/siri.sql
+clickhouse client --database stride --multiquery < ingest/enrich.sql
+
+cat > /etc/systemd/system/stride-api.service <<'SVC'
+[Unit]
+Description=stride-lite API
+After=clickhouse.service
+[Service]
+WorkingDirectory=/opt/stride-lite/api
+Environment=CH_DB=stride
+Environment=PORT=80
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/npx tsx src/server.ts
+Restart=always
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+[Install]
+WantedBy=multi-user.target
+SVC
+systemctl daemon-reload
+systemctl enable --now stride-api
+
+# ---- the one thing that needs a scheduler ---------------------------------
+# ClickHouse reads S3 itself for SIRI, but it cannot open a multi-file zip, so
+# the daily GTFS feed is the single cron entry in the whole system.
+cat > /etc/cron.d/stride-gtfs <<'CRON'
+MAILTO=""
+20 4 * * * root cd /opt/stride-lite && CH_DB=stride CH_CLIENT="clickhouse client" ./ingest/gtfs.sh >> /var/log/stride-gtfs.log 2>&1
+CRON
+
+echo "bootstrap complete" > /var/log/stride-bootstrap.done

@@ -45,6 +45,9 @@ results as production.
 | **Plug and play** — one command, not a mechanism to operate | Multi-step bring-up instructions as the final answer |
 | **Do not load the machine.** It is a volunteer's workstation and their livelihood runs on it | Any default that assumes a dedicated server |
 | **Do not over-simplify if it costs performance.** "Simple" is not a licence to be slow | Dropping indexes, projections or denormalisation to shorten the code |
+| **All of the history on the machine.** Not a recent window | Tiered or partial storage as the default, and with it most of the storage saving |
+| **Availability is not a requirement.** Days of downtime are acceptable because the requesters keep writing to S3 and everything else is derived | Backups, snapshots, failover and health alarms — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
+| **Deletion is not irreversible** where the output is reproducible with compute | Treating 208 GB of intermediate files as precious |
 | What the project pays today is **private**; estimates from public rates are fine | Any comparison quoting the real invoice |
 | A **public repository**, no secrets, Hebrew and English documentation | — |
 | **AI agents must identify themselves** when acting in the project (the repo's own rule) | — |
@@ -61,8 +64,8 @@ None of the following was requested. Each is a judgement call, and each could be
 | **Refreshable materialized views as the scheduler** | `system.view_refreshes` already reports what Airflow is deployed to report | Work that genuinely needs a DAG, not a cadence |
 | **No dbt, scheduler, queue, cache or ORM** | Criterion 2 — each would have to earn its place | A measurement showing one is needed |
 | **Terraform**, as a module beside `hasadna-iac`'s existing ones | Continuation rather than a parallel toolchain | — |
-| **The stale dump's window is the test boundary** | Every differential case must sit inside it or fail for a reason that is not a bug | Fresh data, which needs the unbuilt enrichment |
-| **`m7g.large` + 250–400 GB gp3** for the estimate | Peak measured query memory was ≤25 MB, so 8 GB is not optimistic; the disk, not the instance, is what the bill turns on | A 24-hour steady-state measurement, which has not been run |
+| **The stale dump's window is the test boundary** | Every differential case must sit inside it or fail for a reason that is not a bug | Fresh data — which continuous ingest now provides, so the newer cases compare against today |
+| **`m7g.large` + 300 GB gp3** for the estimate | Peak measured query memory was ≤25 MB, so 8 GB is not optimistic; the disk, not the instance, is what the bill turns on | A 24-hour steady-state measurement, which has not been run |
 
 ### What the agent actually did
 
@@ -82,13 +85,14 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
 
 **Not done:**
 
-- **The daily GTFS refresh is not built**, so the GTFS tables still age from the dump. This is
-  the one piece of the pipeline that is still missing.
+- **`gtfs_ride_stop` is loaded but not refreshed.** The daily GTFS loader replaces the other
+  GTFS tables; this one is a quarter of the database on its own and still dates from the dump.
 - **Throughput under catch-up is measured; a 24-hour steady state is not.** Ingest and
   enrichment together cost **14.7 s per hour of feed** — 9.8 s to pull the snapshots and 4.9 s
   to derive the typed rows — so a week of missed data takes about 41 minutes on six throttled
   cores. What is still unmeasured is RSS and CPU held over a full day of continuous running.
-- **Nothing is deployed.** Stage 5 has not started.
+- **Nothing is deployed.** Priced at $3.24/day and `infra/` provisions a node that boots
+  itself, but nothing has been applied.
 
 ## Quickstart
 
@@ -118,7 +122,7 @@ loaded and counted, not extrapolated.
 | `siri_vehicle_location` (6.5 billion rows) | **1.34 TB** | **111.52 GiB** |
 | The entire database | ~692 GiB of data + ~760 GB of indexes | **163.98 GiB**, or 233.02 GiB with every projection |
 | Growth per year | +307 GB | **+36 GB** |
-| Estimated AWS bill | — | **~$96/month** |
+| Estimated AWS bill | — | **$3.24/day, $98.48/month** |
 
 Three findings behind them:
 
@@ -224,8 +228,8 @@ flowchart TB
     class RAW,TYPED,GTFS,API done
 ```
 
-**Solid arrows are built and measured; dashed arrows are not built.** Three data sources, and
-the difference between them matters:
+**Every arrow is built and measured.** Three data sources, and the difference between them
+matters:
 
 - **The requester archives are live.** `stride-siri-requester/` gets a snapshot roughly every
   minute and `gtfs_archive/` a feed every day, both written by processes already running in
@@ -400,10 +404,13 @@ The directory boundaries are kept clean from day one so that split is mechanical
 - **PostgreSQL wins one query** — a selective `line_ref` + bounding-box filter, 0.017 s
   against 0.063–0.090 s. B-tree indexes on `lon`/`lat` are the right tool there, and closing
   the gap with skip indexes is work not yet done.
-- The AWS estimate's one unquantified risk is **egress above CloudFront's free 1 TB**,
-  which needs a real traffic figure before anyone relies on the ~$96. The estimate itself is
-  built from published AWS rates; what the project pays today was reported privately and is
-  not in this repository.
+- The AWS estimate's one unquantified input is **traffic volume**. Every rate comes from AWS's
+  own price list, regenerated by `scripts/fetch-rates.sh` into
+  [infra/rates.json](infra/rates.json), and compute and disk are 96% of the bill — but egress
+  above CloudFront's free 1 TB needs a real traffic figure. The plan is to point the frontend
+  at the deployment for a few days; `scripts/measure-cost.py` exists because the invoice will
+  read $0 for egress under the free tier and so cannot answer the question. What the project
+  pays today was reported privately and is not in this repository.
 - **Projections are 30% of the footprint, measured.** Four of them take the total from
   163.98 GiB to **233.02 GiB**: `gtfs_ride_stop.by_ride` 29.88 GiB, `siri_ride_stop.by_gtfs_stop`
   19.33 GiB, `siri_ride_stop.by_siri_ride` 18.95 GiB and `siri_ride.by_natural_key` 0.87 GiB.
