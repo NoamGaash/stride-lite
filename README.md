@@ -123,13 +123,17 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
   `updated_duration_minutes is not null` — so the durations above have to land first. The
   matching itself is three joins with a tolerance window, not a heuristic. See finding 13.
 - **The differential suite only compares a window that ended five months ago.** Every case
-  sits inside 2025-01-01 to 2026-05-29 — the intersection of the dump and production's
-  retention — so "all 27 endpoints match production" says nothing about data this build
-  ingested itself. Three of the gaps on this list were invisible to it for that reason, and
-  one (`gtfs_rides_agg_by_hour` frozen at the dump's last day, returning `[]` for any later
-  date) was found by hand rather than by the suite. A second case set on a freshly ingested
-  day is what closes this, and it is worth writing only once durations and matching land,
-  since until then most of its cases would fail for reasons already known.
+  sits inside 2025-01-01 to 2026-05-29, and neither bound is a choice about what to serve:
+  the database holds every day from 2022-11-08, which is two years more than production,
+  whose oldest `siri_vehicle_location` is 2025-01-01 (measured — 2023-06-01 and 2024-06-01
+  both answer `[]` there). The upper bound was a gap in this database between the dump's last
+  day and the day continuous ingest started, and `ingest/backfill-range.sh` closes it from
+  the public archive. What the suite still cannot do is compare a day this build ingested
+  itself, which is why three of the gaps on this list were invisible to it and one
+  (`gtfs_rides_agg_by_hour` frozen at the dump's last day, returning `[]` for any later date)
+  was found by hand. A second case set on a freshly ingested day is what closes that, and it
+  is worth writing once durations and matching land, since until then most of its cases would
+  fail for reasons already known.
 - **Nothing is deployed.** Priced at $3.24/day and `infra/` provisions a node that boots
   itself, but nothing has been applied.
 

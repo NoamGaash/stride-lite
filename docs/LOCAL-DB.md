@@ -168,6 +168,16 @@ just data-ingest-backfill 2026 05 20 08
 
 ## Running the API against it
 
+The dump ends on its own last day, so a database loaded from it has a gap between that day and
+whenever continuous ingest started. `ingest/backfill-range.sh 2026-05-30 2026-11-06` closes it
+from the public archive, oldest first, and is resumable: a day that already has its ~1,430
+snapshots is skipped on the count. Measured at **337 s per day** on six throttled cores, so a
+five-month gap is about fifteen hours.
+
+Stop the enrichment views first and start them after — `SYSTEM STOP VIEW prod.enrich_ride` and
+so on for all six. Their id assignment is `max(id) + row_number()`, which two concurrent
+passes resolve to the same ids.
+
 `scripts/apply-schema.sh` defaults to `CH_DB=stride`, so point it at whichever database the
 API will serve (`CH_DB=prod ./scripts/apply-schema.sh`). It is what installs
 `gtfs_rides_agg_by_hour_refresh`, and without that view the aggregate table is whatever was
