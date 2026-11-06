@@ -88,9 +88,10 @@ jobs:
         working-directory: infra
         run: echo "instance=$(terraform output -raw instance_id)" >> "$GITHUB_OUTPUT"
 
-      # A fresh instance is still running bootstrap.sh, which ends by writing this
-      # file. Deploying into a half-bootstrapped node would race the schema.
-      - name: wait for the node to finish bootstrapping
+      # Only that a command can be sent at all. The agent reports Online long
+      # before bootstrap.sh has finished, so this is not what makes a first deploy
+      # safe — the marker wait in the next step is.
+      - name: wait for the node to accept commands
         run: |
           for _ in $(seq 1 60); do
             state=$(aws ssm describe-instance-information \
@@ -101,6 +102,12 @@ jobs:
           done
           test "$state" = "Online"
 
+      # On a brand-new instance bootstrap.sh is still installing ClickHouse and
+      # applying the schema, and this script applies the schema too: both at once
+      # is two writers to one database. bootstrap.sh ends by writing the marker,
+      # so waiting for it is what makes a first deploy safe — and it is also why
+      # the script being absent is not an error here, since the bootstrap this
+      # waits for is what clones it.
       - name: send the deploy
         id: send
         run: |
@@ -109,7 +116,7 @@ jobs:
             --document-name AWS-RunShellScript \
             --comment "deploy ${GITHUB_SHA::7}" \
             --timeout-seconds 3600 \
-            --parameters commands='["BRANCH=main /opt/stride-lite/scripts/deploy.sh"]' \
+            --parameters commands='["for _ in $(seq 1 120); do [ -f /var/log/stride-bootstrap.done ] && break; sleep 10; done; test -f /var/log/stride-bootstrap.done || { echo \"bootstrap never finished\" >&2; exit 1; }; BRANCH=main /opt/stride-lite/scripts/deploy.sh"]' \
             --query 'Command.CommandId' --output text)
           echo "id=$id" >> "$GITHUB_OUTPUT"
 

@@ -395,6 +395,27 @@ the account and CloudFront's API carries no useful resource conditions. **An acc
 long-lived credential**; GitHub's OIDC provider with a role to assume removes it entirely and
 is the better answer once the first deploy works.
 
+### What the first deploy leaves you with
+
+A working API over a nearly empty database, and that is not a bug to chase.
+`bootstrap.sh` applies the schema and starts the refreshable views, which read the
+running hour from S3 — so SIRI data accumulates from go-live forward, and nothing
+before it exists. GTFS waits for its cron entry at 04:20 UTC, so for up to a day
+`newest_gtfs_date` in `/status` is null and every endpoint that joins GTFS answers
+empty.
+
+Filling the history is a deliberate one-time run, because it costs hours and a lot
+of S3 reads:
+
+```bash
+aws ssm send-command --instance-ids "$ID" --document-name AWS-RunShellScript \
+  --timeout-seconds 86400 --parameters commands='["cd /opt/stride-lite && CH_DB=stride CH_CLIENT=\"clickhouse client\" ./ingest/gtfs.sh && ./ingest/backfill-range.sh 2026-01-01 $(date -u +%F)"]'
+```
+
+`ingest/catchup.sh` deliberately does not do this. It walks forward from the newest
+snapshot actually loaded, and on an empty database there is no such snapshot, so it
+says so and exits 0 rather than guessing a start date.
+
 ### Schema changes
 
 Three kinds, and only one of them needs a migration.

@@ -372,6 +372,23 @@ echo "$BUCKET"   # זה ה-variable בשם TF_STATE_BUCKET
 key הוא credential ארוך־חיים**; ה-OIDC של GitHub עם role להיכנס אליו מבטל אותו לגמרי, וזו
 התשובה הנכונה יותר אחרי שהפריסה הראשונה עובדת.
 
+### מה ה-deploy הראשון משאיר לך
+
+API עובד מעל DB כמעט ריק, וזה לא באג שצריך לחפש. `bootstrap.sh` מחיל את הסכמה
+ומפעיל את ה-views, שקוראים את השעה הנוכחית מ-S3 — כלומר דאטת SIRI מצטברת מרגע
+העלייה והלאה, ומה שלפניה פשוט לא קיים. GTFS מחכה ל-cron ב-04:20 UTC, ולכן עד
+יממה `newest_gtfs_date` ב-`/status` יהיה null וכל endpoint שמצטרף ל-GTFS יחזיר ריק.
+
+מילוי ההיסטוריה הוא הרצה חד-פעמית ומכוונת, כי היא לוקחת שעות והמון קריאות S3:
+
+```bash
+aws ssm send-command --instance-ids "$ID" --document-name AWS-RunShellScript \
+  --timeout-seconds 86400 --parameters commands='["cd /opt/stride-lite && CH_DB=stride CH_CLIENT=\"clickhouse client\" ./ingest/gtfs.sh && ./ingest/backfill-range.sh 2026-01-01 $(date -u +%F)"]'
+```
+
+`ingest/catchup.sh` לא עושה את זה בכוונה. הוא מתקדם מה-snapshot האחרון שנטען
+בפועל, וב-DB ריק אין כזה — אז הוא אומר את זה ויוצא ב-0 במקום לנחש תאריך התחלה.
+
 ### שינויים בסכמה
 
 שלושה סוגים, ורק אחד מהם צריך מיגרציה.
