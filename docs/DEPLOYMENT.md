@@ -489,6 +489,75 @@ monitoring is `system.view_refreshes`.
 
 ---
 
+### Would scaling out ever pay?
+
+Asked out of curiosity, answered with measurements, and the answer is no for a long time —
+but not for the reason one would guess. Everything below was measured on the single node while
+the backfill was running, so it is a loaded box rather than a quiet one.
+
+**Read concurrency is not the constraint, by four orders of magnitude.** The query the map
+actually issues — a 30-second window of vehicle locations, 1,000 rows — with every request
+asking for a different window so nothing is served from a cache:
+
+| Concurrent requests | Wall | p95 | Throughput |
+| --- | --- | --- | --- |
+| 1 | 185 ms | 171 ms | 5.4 req/s |
+| 4 | 231 ms | 218 ms | 17.3 req/s |
+| 8 | 212 ms | 196 ms | 37.7 req/s |
+| 16 | 227 ms | 214 ms | 70.5 req/s |
+| 32 | 227 ms | 200 ms | **141 req/s** |
+
+p95 is flat from 1 to 32. Against that, the real traffic is 39,123 page views a month — about
+**0.015 requests a second** averaged, and a hundredfold peak is still 1.5. One node is not
+close to its limit, and CloudFront sits in front of it absorbing the repeats anyway.
+
+**Latency is the constraint, and it is not the kind more machines fix.** Per endpoint, locally:
+
+| Endpoint | |
+| --- | --- |
+| `/stop_arrivals/list` | 0.02 s |
+| `/gtfs_ride_stops/list` | 0.05 s |
+| `/gtfs_rides_agg/group_by`, 20 days | 0.14 s |
+| `/siri_velocity_aggregation`, 2 h box | 0.69 s |
+| `/siri_rides/list`, 5 min | 1.20 s |
+| `/rides_execution/list`, one day one line | 3.96 s |
+| `/route_timetable/list`, 30 min one line | **6.53 s** |
+
+The slow one walks `gtfs_ride_stop`, which is 4.68 billion rows, and that is exactly the shape
+sharding is supposed to help: split the rows, split the scan. Except it would not, because the
+query does not scale with threads either:
+
+| `max_threads` | |
+| --- | --- |
+| 1 | 6.19 s |
+| 2 | 7.10 s |
+| 6 | 7.10 s |
+
+Six cores are no better than one, so six nodes would be no better than one. The `by_ride`
+projection is materialised across all 18 parts (62.37 GiB), and driving the joins from the
+route side instead of the stop side changes nothing — 6.19 s either way. **The cause is not
+found**, and it is in [the roadmap](../ROADMAP.md) rather than guessed at here. What is
+established is that it is not a capacity problem.
+
+**And at the next step up, out and up cost the same.** A two-shard cluster is two instances,
+the same total disk split between them, and two addresses: $133.42 a month. A single
+`t4g.xlarge` with twice the cores and twice the memory is $129.76. The same money, except the
+bigger box also lifts the 4 GiB ceiling that an unfiltered `/siri_rides/list` hits, and needs
+no distributed tables, no cluster configuration and no replication to operate.
+
+So the order is: fix the query, then buy a bigger box, and only then think about a second one.
+The cases where a second one is actually the answer are:
+
+- **Data outgrowing one volume.** gp3 stops at 16 TiB and the database is 280 GiB growing at
+  36 GiB a year. That is centuries, not years.
+- **Availability.** Explicitly not a requirement here — the requesters keep writing to S3 and
+  everything else is derived, so days of downtime cost nothing but freshness.
+- **Read concurrency.** Four orders of magnitude away, and CloudFront is the cheap version of
+  it: the frontend's query strings repeat under a 300 s TTL, and 39,123 views a month sits far
+  inside the permanent 1 TB and 10 M request free tier.
+
+---
+
 ## 5. Tradeoffs available
 
 Ordered by how much they buy.

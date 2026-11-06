@@ -137,6 +137,12 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
   was found by hand. A second case set on a freshly ingested day is what closes that, and it
   is worth writing once durations and matching land, since until then most of its cases would
   fail for reasons already known.
+- **`/route_timetable/list` takes 6.5 s and nobody knows why yet.** It walks `gtfs_ride_stop`,
+  4.68 billion rows, and the two obvious explanations are both ruled out by measurement: the
+  `by_ride` projection is materialised across all 18 parts, and driving the joins from the
+  route side rather than the stop side gives the same 6.19 s. It is also immune to
+  parallelism — 6.19 s on one thread, 7.10 s on six — so no amount of hardware is the answer.
+  `/rides_execution/list` is 3.96 s and probably the same cause.
 - **Nothing is deployed.** Priced at $2.72/day and `infra/` provisions a node that boots
   itself, but nothing has been applied.
 
