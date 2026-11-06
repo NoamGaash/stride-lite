@@ -55,8 +55,23 @@ jobs:
         working-directory: infra
         run: |
           terraform plan -input=false -out=tfplan \
-            -var "region=${{ vars.AWS_REGION }}" \
-            -var "budget_email=${{ secrets.BUDGET_EMAIL }}"
+            -var "region=${{ vars.AWS_REGION }}"
+
+      # The point of this project is that its numbers can be checked, so the
+      # plan goes where anyone can read it rather than only into the log of a job
+      # they would have to go looking for. Nothing here is secret: it is a diff
+      # of resource attributes, and the only address in it is published on
+      # purpose. This is also the answer to wanting a public state file without
+      # a public bucket — the plan is the readable part, and the state is not.
+      - name: publish the plan
+        working-directory: infra
+        run: |
+          {
+            echo '## terraform plan'
+            echo '```'
+            terraform show -no-color tfplan
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: apply
         working-directory: infra

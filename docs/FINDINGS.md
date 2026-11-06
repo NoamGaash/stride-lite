@@ -298,6 +298,66 @@ for the whole history instead of inheriting the gap.
 
 ---
 
+## 14. The ministry reports buses from the future, and the API serves them
+
+`max(recorded_at_time)` over this database is **2038-01-14 17:22:21**. Measured on the rows
+ingested since 2026-11-01: **53,976 of 17,034,687 readings, 0.32%, carry a timestamp later than
+the moment they were read.**
+
+They are not clustered at one bad value, which is what a single broken device would look like.
+By year, for those rows:
+
+| Year stamped | Readings |
+| --- | --- |
+| 2027 | 11,026 |
+| 2028 | 17,525 |
+| 2029 | 11,346 |
+| 2030 | 839 |
+| 2031 | 1,840 |
+| 2032 | 881 |
+| 2033 | 5,316 |
+| 2034 | 4,630 |
+| 2035 | 208 |
+| 2036 | 871 |
+| 2037 | 359 |
+| 2038 | 77 |
+
+**It is in the ministry's own archive, not in the parsing.** The obvious suspicion is that
+`parseDateTime32BestEffort` invented these out of a malformed string, so one was traced back to
+the source file. Snapshot `2026/06/08/16/46`, vehicle `38552002`, read straight from
+`s3://openbus-stride-public` with every field as a string:
+
+```
+raw_recorded_at_time:        2029-01-01T17:02:01+02:00
+data_frame_ref:              2026-06-08
+origin_aimed_departure_time: 2026-06-08T19:40:00+03:00
+```
+
+The ride's service date is 2026-06-08 and its aimed departure is that evening. The reading says
+it was recorded on 1 January 2029. `2029-01-01T17:02:01+02:00` is `2029-01-01 15:02:01` UTC,
+which is exactly what this database stores — so the value is carried faithfully from the source
+and the defect is upstream of everything we built.
+
+Two details that point at a cause without settling it. The bogus record carries `+02:00`, which
+is Israel's winter offset, while the same vehicle's good readings in the same June snapshot
+carry `+03:00` — consistent with a device whose clock has been reset rather than skewed. And
+the same `(vehicle, bogus timestamp)` pair repeats across four consecutive snapshots, so it is
+a device that stayed wrong, not a transmission glitch.
+
+**Why it matters beyond being untidy.** It is served. `/siri_vehicle_locations/list` with no
+upper bound returns these rows, which is how this was found: a sample for a compression
+measurement came back with readings in 2035 and the ratio made no sense. Anything that takes
+`max(recorded_at_time)` as "how fresh is the data" gets 2038, and anything that plots a vehicle
+over time gets a track that leaves the chart. The status query this implementation publishes
+deliberately uses the ingested snapshot id instead, because that comes from the archive's own
+path and cannot be a bus's opinion about the date.
+
+A bounded `max(recorded_at_time) WHERE recorded_at_time <= now()` returns the right answer and
+was measured at 5.9 s against 105 ms, because the bound stops the index being read from the
+tail. That is the cost of working around it rather than fixing it at the source.
+
+---
+
 ## Reporting these
 
 These are observations from outside, and some may have a reason we cannot see

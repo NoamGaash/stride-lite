@@ -359,7 +359,7 @@ because three are account-specific and one is an address:
 | --- | --- | --- |
 | An S3 bucket, versioning on | Terraform state | With local state every CI run starts from nothing and tries to create what exists |
 | IAM user + `infra/deployer-policy.json` | the credentials CI uses | Replace `REPLACE-WITH-STATE-BUCKET` and `REPLACE-WITH-REGION` in it first |
-| Secrets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `BUDGET_EMAIL` | | |
+| Secrets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | | |
 | Variables `AWS_REGION`, `TF_STATE_BUCKET` | | |
 
 ```bash
@@ -429,25 +429,55 @@ serves ministry data that is already public — and so is the data.
 | Ingest freshness from `system.view_refreshes` and the newest snapshot id | Operational state with nothing secret in it, and the thing a reader actually wants: is the data current |
 | `infra/rates.json` and `scripts/measure-cost.py` | Public rates and a script. An estimate nobody can re-derive is one nobody should act on |
 
-**Must stay private, and the Terraform state is the one to be firm about.** It is tempting
-because it looks like configuration, and it is not: it is a record of real resource attributes,
-and it stores them in plaintext whatever the configuration says. Measured on a throwaway
-config — a variable marked `sensitive = true`, whose value `terraform show` prints as
-`(sensitive value)`, appears verbatim in `terraform.tfstate`. So `sensitive` protects the logs
-and not the file. Today the only thing it exposes here is an email address and the account id;
-the rule matters because the day anyone adds a resource that generates a credential, that
-credential is in the state file, and a public bucket makes that an instant disclosure rather
-than a mistake someone can still fix.
+**The state bucket stays private, and the honest reason is not secrets.** This configuration
+creates nothing that generates a credential — no database password, no access key, no
+certificate — so there is no secret in the state file today. What is in it is the account id,
+resource ids, and an email address that is published deliberately. Saying "a credential might
+end up there" is true of any Terraform project and is not a reason on its own.
 
-Two further reasons, neither about secrets:
+The reasons that do hold are both about the bucket rather than the file:
 
 - **A public-read bucket is a cost amplifier.** S3 GET requests and transfer out are billed to
   the bucket's owner, so anyone who wants to can loop on the object and put it on your bill.
-  For a project whose whole case is a $150 ceiling, that is not a theoretical risk.
-- **A public-write bucket would be worse than a leak.** Anyone could rewrite the state, and
-  the next `terraform apply` would then destroy or recreate real infrastructure to match it.
+  For a project whose whole case is a $150 ceiling, that is not theoretical.
+- **A public-write bucket would be worse than a leak.** Anyone could rewrite the state, and the
+  next `terraform apply` would destroy or recreate real infrastructure to match it.
+
+And there is a better way to get what a public state file would give. The `deploy` workflow
+writes `terraform show` of the plan into the job summary, which is public because the
+repository is, and which is the readable part anyway. Worth knowing for the day this
+configuration does grow a credential: `sensitive = true` redacts a value in `terraform show`
+and **not** in the file. Measured — a variable marked sensitive, printed as `(sensitive value)`,
+appears verbatim in `terraform.tfstate`.
 
 AWS blocks public access on new buckets by default. Leave that on.
+
+**CloudWatch, and why there is none.** Nothing here ships logs anywhere: ClickHouse writes to
+`/var/log/clickhouse-server/`, the two cron jobs to `/var/log/stride-*.log`, and the API to the
+journal. That is not an oversight to be fixed by turning CloudWatch on, for two reasons. It
+costs $0.50 per GB ingested and $0.03 per GB stored, which is a new line on a bill this
+project is arguing down. And a CloudWatch log group **cannot be made public** — there is no
+public-read mode for one, so shipping logs there would move operational state further from the
+public, not closer.
+
+What raw logs would also carry is the thing to be careful about: ClickHouse's `system.query_log`
+records the query and the client address, so publishing it verbatim publishes visitors' IP
+addresses. The open version of this is derived state and not raw logs — `system.view_refreshes`
+and the newest ingested snapshot id, measured at 78 ms for the whole set, which says what a
+reader actually wants to know (is the data current) and contains nothing about anyone.
+
+### Resizing the disk
+
+**Up, online, any time. Down, never.** `aws ec2 modify-volume` grows a gp3 volume with no
+downtime and no detach; the filesystem then needs `resize2fs` to see it. There is a cooldown of
+about six hours before the same volume can be modified again.
+
+Shrinking is not a modification at all: it means a new smaller volume, a copy, and a swap. That
+matters more in Terraform than on the command line, because **lowering `data_volume_gb` plans a
+replacement**, and replacing this volume destroys the database and the fifteen hours of
+backfill that filled it. `aws_ebs_volume.data` therefore carries `prevent_destroy = true`, so
+that mistake is an error instead of a silent loss. For a deliberate teardown, remove the block,
+apply, then destroy.
 
 **Also private, and for a different reason:** the actual bill, and Kamatera's invoice. Those
 are the organisation's spend, not ours to publish. Estimates derived from published rates are

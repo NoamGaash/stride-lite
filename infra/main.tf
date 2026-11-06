@@ -88,19 +88,13 @@ variable "budget_usd" {
   default     = 150
 }
 
+# Defaulted and not sensitive, at the owner's explicit request: the address is
+# public and he would rather the plan be readable than the field be redacted.
+# The cost is that a published address gets scraped; that was his call to make.
 variable "budget_email" {
-  description = "Where the budget alert goes. Not defaulted: an address does not belong in a public repo."
+  description = "Where the budget alert goes."
   type        = string
-
-  # The CI logs of a public repository are public. Measured: without this, plan
-  # prints `subscriber_email_addresses = ["someone@example.org"]` in full, and
-  # with it, `(sensitive value)`. GitHub also masks registered secrets, but that
-  # is pattern matching on one more thing going right, and this is the mechanism
-  # that is supposed to carry it.
-  #
-  # It does not help the state file, which stores real values whatever this says.
-  # That is why the state bucket is private and the plan is what gets published.
-  sensitive = true
+  default     = "noam.gaash@gmail.com"
 }
 
 data "aws_ami" "al2023_arm" {
@@ -182,8 +176,19 @@ resource "aws_instance" "app" {
 resource "aws_ebs_volume" "data" {
   availability_zone = aws_instance.app.availability_zone
   size              = var.data_volume_gb
-  type              = "gp3"
-  encrypted         = true
+
+  # EBS grows in place and never shrinks. Raising data_volume_gb is an online
+  # modify with no downtime; LOWERING it is a replacement, and a replacement of
+  # this volume is the loss of the whole database and the fifteen hours of
+  # backfill that filled it. There is no undo and no warning beyond the plan.
+  #
+  # So this is here to turn that mistake into an error. For a deliberate
+  # teardown, remove the block, apply, then destroy.
+  lifecycle {
+    prevent_destroy = true
+  }
+  type      = "gp3"
+  encrypted = true
 
   tags = {
     Name    = "stride-lite-data"
