@@ -300,6 +300,8 @@ for the whole history instead of inheriting the gap.
 
 ## 14. The ministry reports buses from the future, and the API serves them
 
+> Reported as [open-bus-map-search#1928](https://github.com/hasadna/open-bus-map-search/issues/1928).
+
 `max(recorded_at_time)` over this database is **2038-01-14 17:22:21**. Measured on the rows
 ingested since 2026-11-01: **53,976 of 17,034,687 readings, 0.32%, carry a timestamp later than
 the moment they were read.**
