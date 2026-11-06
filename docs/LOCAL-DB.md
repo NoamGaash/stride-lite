@@ -178,6 +178,13 @@ Stop the enrichment views first and start them after — `SYSTEM STOP VIEW prod.
 so on for all six. Their id assignment is `max(id) + row_number()`, which two concurrent
 passes resolve to the same ids.
 
+`ingest/catchup.sh` is the same walk without that caveat, and it is what a deployed node runs
+at boot and once an hour. It reads the newest snapshot id in `siri_snapshot_seen`, walks from
+that day to today, and writes the landing table only — the live chain reads the landing table
+whole every minute and dedups with `NOT IN`, so it enriches those rows itself and stays the
+only writer. So a machine switched off for a week completes itself when it comes back, with
+nothing to run by hand.
+
 `scripts/apply-schema.sh` defaults to `CH_DB=stride`, so point it at whichever database the
 API will serve (`CH_DB=prod ./scripts/apply-schema.sh`). It is what installs
 `gtfs_rides_agg_by_hour_refresh`, and without that view the aggregate table is whatever was

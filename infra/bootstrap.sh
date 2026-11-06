@@ -109,12 +109,26 @@ SVC
 systemctl daemon-reload
 systemctl enable --now stride-api
 
-# ---- the one thing that needs a scheduler ---------------------------------
+# ---- the two things that need a scheduler ---------------------------------
 # ClickHouse reads S3 itself for SIRI, but it cannot open a multi-file zip, so
-# the daily GTFS feed is the single cron entry in the whole system.
+# the daily GTFS feed is one cron entry.
 cat > /etc/cron.d/stride-gtfs <<'CRON'
 MAILTO=""
 20 4 * * * root cd /opt/stride-lite && CH_DB=stride CH_CLIENT="clickhouse client" ./ingest/gtfs.sh >> /var/log/stride-gtfs.log 2>&1
+CRON
+
+# And the catch-up is the other. The views in ingest/siri.sql cover the running
+# hour and the one before it, which heals a missed refresh and not a week of
+# downtime; ingest/catchup.sh starts from the newest snapshot actually loaded and
+# walks forward to today. At boot because that is when a gap exists, and hourly
+# because an outage shorter than a reboot still leaves one.
+#
+# flock because a week-long catch-up takes hours and the next hourly tick must
+# not start a second one. -n so the tick simply does not run rather than queueing.
+cat > /etc/cron.d/stride-catchup <<'CRON'
+MAILTO=""
+@reboot root sleep 120; flock -n /var/lock/stride-catchup -c 'cd /opt/stride-lite && CH_DB=stride CH_CLIENT="clickhouse client" ./ingest/catchup.sh' >> /var/log/stride-catchup.log 2>&1
+17 * * * * root flock -n /var/lock/stride-catchup -c 'cd /opt/stride-lite && CH_DB=stride CH_CLIENT="clickhouse client" ./ingest/catchup.sh' >> /var/log/stride-catchup.log 2>&1
 CRON
 
 echo "bootstrap complete" > /var/log/stride-bootstrap.done

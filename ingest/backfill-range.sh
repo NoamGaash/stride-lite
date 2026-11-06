@@ -14,6 +14,13 @@
 # PARTITION BY in db/raw.sql makes instant; the month still being ingested live
 # is left alone. `siri_snapshot_seen` survives the drop, so nothing is re-read.
 #
+# ENRICH=0 loads the landing table and stops there, which is what
+# ingest/catchup.sh wants: the live chain in ingest/enrich.sql reads the landing
+# table whole every minute and will pick the rows up itself. Enriching here is
+# for a cold load with that chain stopped — the two must not run at once, since
+# the chain assigns ids as max(id) + row_number() and two concurrent passes hand
+# out the same ones.
+#
 # Resumable: a day that already has its snapshots is skipped on the count rather
 # than re-read, because confirming a day otherwise costs 1,440 file headers.
 set -euo pipefail
@@ -28,6 +35,7 @@ to=${2:?}
 # A healthy requester writes about 1,430 snapshots a day. Below this a day is
 # partial and worth asking S3 about again.
 MIN_SNAPSHOTS=${MIN_SNAPSHOTS:-1400}
+ENRICH=${ENRICH:-1}
 
 ch() { $CH --database "$CH_DB" "$@"; }
 
@@ -62,7 +70,7 @@ while [ "$(date -u -d "$day" +%s)" -le "$end" ]; do
     echo "$day: $have snapshots loaded, fetching"
     # shellcheck disable=SC2086
     CH_DB="$CH_DB" CH_CLIENT="$CH" "$here/backfill.sh" $(date -u -d "$day" +'%Y %m %d')
-    ch --multiquery < "$here/enrich-once.sql"
+    [ "$ENRICH" = 1 ] && ch --multiquery < "$here/enrich-once.sql"
   fi
 
   day=$(date -u -d "$day + 1 day" +%F)
@@ -70,9 +78,15 @@ done
 
 drop_month "$month"
 
-ch --query "
-  SELECT
-      min(recorded_at_time) AS earliest,
-      max(recorded_at_time) AS latest,
-      count() AS rows
-  FROM siri_vehicle_location"
+if [ "$ENRICH" = 1 ]; then
+  ch --query "
+    SELECT
+        min(recorded_at_time) AS earliest,
+        max(recorded_at_time) AS latest,
+        count() AS rows
+    FROM siri_vehicle_location"
+else
+  ch --query "
+    SELECT max(siri_snapshot_id) AS newest_snapshot_loaded
+    FROM siri_snapshot_seen FINAL"
+fi
