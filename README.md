@@ -122,6 +122,14 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
   ride durations — upstream's `siri/update_rides_gtfs.py` runs four `UPDATE`s, each gated on
   `updated_duration_minutes is not null` — so the durations above have to land first. The
   matching itself is three joins with a tolerance window, not a heuristic. See finding 13.
+- **The differential suite only compares a window that ended five months ago.** Every case
+  sits inside 2025-01-01 to 2026-05-29 — the intersection of the dump and production's
+  retention — so "all 27 endpoints match production" says nothing about data this build
+  ingested itself. Three of the gaps on this list were invisible to it for that reason, and
+  one (`gtfs_rides_agg_by_hour` frozen at the dump's last day, returning `[]` for any later
+  date) was found by hand rather than by the suite. A second case set on a freshly ingested
+  day is what closes this, and it is worth writing only once durations and matching land,
+  since until then most of its cases would fail for reasons already known.
 - **Nothing is deployed.** Priced at $3.24/day and `infra/` provisions a node that boots
   itself, but nothing has been applied.
 
