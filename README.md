@@ -116,6 +116,12 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
   location is 6 hours old, a ride still without locations after 2 days is stamped `0` rather
   than left null, and `updated_duration_minutes` records when the task ran — which is ETL
   bookkeeping, and therefore ours.
+- **Siri rides are not matched to GTFS rides.** `enrich_ride` writes NULL into all four
+  `*_gtfs_ride_id` columns, so `/gtfs_rides_agg/group_by` returns `total_actual_rides = 0` for
+  every day this build ingested, where production now returns a number. It is one gate behind
+  ride durations — upstream's `siri/update_rides_gtfs.py` runs four `UPDATE`s, each gated on
+  `updated_duration_minutes is not null` — so the durations above have to land first. The
+  matching itself is three joins with a tolerance window, not a heuristic. See finding 13.
 - **Nothing is deployed.** Priced at $3.24/day and `infra/` provisions a node that boots
   itself, but nothing has been applied.
 

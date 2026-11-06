@@ -227,7 +227,7 @@ anywhere in the stack --- in egress, in latency, and on mobile data.
 
 ---
 
-## 13. Ride durations are missing for about twenty months, and will stay missing
+## 13. Twenty months of missing ride durations also zeroed the dashboard's actual-ride counts
 
 `siri_ride.duration_minutes` is written by `stride-etl-siri-add-ride-durations`, which the
 project describes as running every hour and repopulating all ride durations. Sampled one hour
@@ -249,6 +249,42 @@ September, 609,298 of 2,485,854 in October, 147,693 of 2,785,949 in November, an
 It will not recover on its own. `main(num_days=4)` processes a trailing four-day window, and
 the `UPDATE` is gated on `updated_duration_minutes IS NULL`, so a ride older than the window
 is never reconsidered. The hourly task keeps today's data correct and cannot reach back.
+
+**Production recovered going forward on 2026-09-08, and the hole stayed.** Measured against
+live production on 2026-11-06, one 30-minute window of `/siri_rides/list` per date, 200 rides
+each:
+
+| Date | With a duration | Linked to a GTFS ride |
+| --- | --- | --- |
+| 2025-03-10 | **0 / 200** | **0 / 200** |
+| 2026-05-25 | **0 / 200** | **0 / 200** |
+| 2026-09-15 | 200 / 200 | 199 / 200 |
+| 2026-11-03 | 200 / 200 | 200 / 200 |
+
+So whatever was fixed was fixed for new data only, exactly as the trailing window predicts.
+
+**The consequence is larger than a missing column, and it is the reason this was found.**
+Every `UPDATE` in `open-bus-stride-etl`'s `siri/update_rides_gtfs.py` — all four of them — is
+gated on `siri_ride.updated_duration_minutes is not null`. No duration therefore means no
+`scheduled_time_gtfs_ride_id`, and `gtfs_rides_agg_by_hour` counts actual rides as
+`count(*) filter (WHERE sr.scheduled_time_gtfs_ride_id is not null)`. The whole chain is one
+gate deep, and `/gtfs_rides_agg/group_by` is what the dashboard's execution charts read.
+
+Measured against live production on 2026-11-06, summed over all operators for one day:
+
+| Date | Planned rides | Actual rides |
+| --- | --- | --- |
+| 2024-08-14 | 119,923 | 114,210 |
+| 2025-03-10 | 119,622 | **0** |
+| 2025-11-10 | 122,264 | **0** |
+| 2026-05-25 | 121,671 | **0** |
+| 2026-08-25 | 119,615 | **0** |
+| 2026-09-08 | 123,331 | 1,240 |
+| 2026-09-10 | 124,359 | 116,613 |
+| 2026-11-03 | 124,220 | 118,404 |
+
+For roughly twenty months the dashboard answered "zero buses ran" for every operator on every
+day, and it reads as data rather than as an outage. Nothing in the API distinguishes the two.
 
 **A second, separate defect in the same file.** `SET_DURATION_OLD_TRIPS` writes
 `duration_minutes = 0` for any ride still without locations two days on, which makes "no data"

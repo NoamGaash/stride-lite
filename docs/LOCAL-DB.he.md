@@ -163,6 +163,12 @@ just data-ingest-backfill 2026 05 20 08
 
 ## להריץ את ה-API מולו
 
+`scripts/apply-schema.sh` מוגדר כברירת מחדל ל-`CH_DB=stride`, אז צריך להפנות אותו למסד שה-API
+באמת משרת (`CH_DB=prod ./scripts/apply-schema.sh`). הוא זה שמתקין את
+`gtfs_rides_agg_by_hour_refresh`, ובלי ה-view הזה טבלת האגרגציה היא מה שנטען פעם אחת ולא חושב
+שוב — ואז `/gtfs_rides_agg/group_by` מחזיר `[]` לכל תאריך שאחרי הטעינה, בלי שגיאה שתסביר למה.
+`SELECT view, status, last_success_time FROM system.view_refreshes` הוא המקום שבו זה נראה.
+
 ```bash
 cd api
 npm ci

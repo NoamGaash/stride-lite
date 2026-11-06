@@ -168,6 +168,13 @@ just data-ingest-backfill 2026 05 20 08
 
 ## Running the API against it
 
+`scripts/apply-schema.sh` defaults to `CH_DB=stride`, so point it at whichever database the
+API will serve (`CH_DB=prod ./scripts/apply-schema.sh`). It is what installs
+`gtfs_rides_agg_by_hour_refresh`, and without that view the aggregate table is whatever was
+loaded once and never recomputed — `/gtfs_rides_agg/group_by` then returns `[]` for any date
+past the load, with no error to say why. `SELECT view, status, last_success_time FROM
+system.view_refreshes` is where that shows up.
+
 ```bash
 cd api
 npm ci
