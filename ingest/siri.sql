@@ -26,7 +26,7 @@ ORDER BY siri_snapshot_id;
 -- 2. Maintains it. An incremental view sees each INSERT's own block and writes
 --    only that block's ids, so the cost follows new rows and never the billions
 --    already stored.
-CREATE MATERIALIZED VIEW IF NOT EXISTS siri_snapshot_seen_mv
+CREATE OR REPLACE MATERIALIZED VIEW siri_snapshot_seen_mv
 TO siri_snapshot_seen
 AS
 SELECT siri_snapshot_id
@@ -47,7 +47,7 @@ GROUP BY siri_snapshot_id;
 --    the WHERE clause makes a redundant pass read 60 file headers and write 0
 --    rows.
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS siri_ingest_current
+CREATE OR REPLACE MATERIALIZED VIEW siri_ingest_current
 REFRESH EVERY 1 MINUTE APPEND
 TO siri_vehicle_location_raw
 AS
@@ -79,7 +79,7 @@ WHERE replaceRegexpOne(_path, '^[^/]+/stride-siri-requester/(.*)\\.br$', '\\1')
 SETTINGS input_format_skip_unknown_fields = 1, glob_expansion_max_elements = 9999999
 ;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS siri_ingest_previous
+CREATE OR REPLACE MATERIALIZED VIEW siri_ingest_previous
 REFRESH EVERY 10 MINUTE APPEND
 TO siri_vehicle_location_raw
 AS

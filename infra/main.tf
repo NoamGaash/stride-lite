@@ -1,10 +1,21 @@
 terraform {
-  required_version = ">= 1.9"
+  # 1.10 for S3 native state locking, which is what use_lockfile below asks for.
+  required_version = ">= 1.10"
   required_providers {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.70"
     }
+  }
+
+  # Partial configuration: bucket and region come from CI, because the bucket
+  # belongs to whoever is deploying and an account's bucket name does not belong
+  # in a public repository. State has to be remote for CI to apply at all — with
+  # local state every run starts from nothing and tries to create what already
+  # exists. `terraform init -backend=false` in the validate job is unaffected.
+  backend "s3" {
+    key          = "stride-lite/terraform.tfstate"
+    use_lockfile = true
   }
 }
 

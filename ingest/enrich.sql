@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS siri_snapshot_enriched
 ENGINE = ReplacingMergeTree
 ORDER BY siri_snapshot_id;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS siri_snapshot_enriched_mv
+CREATE OR REPLACE MATERIALIZED VIEW siri_snapshot_enriched_mv
 TO siri_snapshot_enriched
 AS
 SELECT siri_snapshot_id
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS siri_vehicle_location_max_id
 ENGINE = AggregatingMergeTree
 ORDER BY marker;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS siri_vehicle_location_max_id_mv
+CREATE OR REPLACE MATERIALIZED VIEW siri_vehicle_location_max_id_mv
 TO siri_vehicle_location_max_id
 AS
 SELECT 1 AS marker, maxState(id) AS max_id
@@ -296,24 +296,28 @@ FROM (
 -- it reads from has finished, so a ride never looks for a route that is not
 -- there yet. APPEND is load-bearing — without it a refreshable view REPLACES
 -- its target's contents, which here would delete the history every minute.
+--
+-- Replacing a view this chain depends on keeps the dependency: measured, after
+-- OR REPLACE of an upstream view the dependent still declares DEPENDS ON it and
+-- both stay Scheduled.
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS enrich_route
+CREATE OR REPLACE MATERIALIZED VIEW enrich_route
 REFRESH EVERY 1 MINUTE APPEND TO siri_route AS SELECT * FROM enrich_route_src;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS enrich_stop
+CREATE OR REPLACE MATERIALIZED VIEW enrich_stop
 REFRESH EVERY 1 MINUTE APPEND TO siri_stop AS SELECT * FROM enrich_stop_src;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS enrich_snapshot
+CREATE OR REPLACE MATERIALIZED VIEW enrich_snapshot
 REFRESH EVERY 1 MINUTE APPEND TO siri_snapshot AS SELECT * FROM enrich_snapshot_src;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS enrich_ride
+CREATE OR REPLACE MATERIALIZED VIEW enrich_ride
 REFRESH EVERY 1 MINUTE DEPENDS ON enrich_route
 APPEND TO siri_ride AS SELECT * FROM enrich_ride_src;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS enrich_ride_stop
+CREATE OR REPLACE MATERIALIZED VIEW enrich_ride_stop
 REFRESH EVERY 1 MINUTE DEPENDS ON enrich_ride, enrich_stop
 APPEND TO siri_ride_stop AS SELECT * FROM enrich_ride_stop_src;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS enrich_vehicle_location
+CREATE OR REPLACE MATERIALIZED VIEW enrich_vehicle_location
 REFRESH EVERY 1 MINUTE DEPENDS ON enrich_ride_stop, enrich_snapshot
 APPEND TO siri_vehicle_location AS SELECT * FROM enrich_vehicle_location_src;

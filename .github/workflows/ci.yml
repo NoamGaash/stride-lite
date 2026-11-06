@@ -46,10 +46,15 @@ jobs:
         env:
           CH_CLIENT: ./clickhouse client
         run: ./scripts/apply-schema.sh
-      - name: Expect the 16 tables plus the aggregation table and its refresh
+      - name: Expect the 16 tables, the aggregation table and its refresh, and the migration record
         run: |
           n=$(./clickhouse client --query "SELECT count() FROM system.tables WHERE database='stride'")
-          test "$n" = 18 || { echo "got $n tables, want 18"; exit 1; }
+          test "$n" = 19 || { echo "got $n tables, want 19"; exit 1; }
+
+      - name: Expect apply-schema to be idempotent
+        run: ./scripts/apply-schema.sh
+        env:
+          CH_CLIENT: ./clickhouse client
 
       - name: Apply the raw landing table
         run: ./clickhouse client --database stride --multiquery < db/raw.sql
@@ -89,6 +94,30 @@ jobs:
           ./clickhouse client --database stride --multiquery < ingest/enrich-once.sql
           n=$(./clickhouse client --query "SELECT count() FROM stride.siri_vehicle_location")
           test "$n" = 0 || { echo "enrichment invented $n rows from an empty feed"; exit 1; }
+
+      # A deploy applies these files to a database that already exists, and under
+      # CREATE ... IF NOT EXISTS a changed view body is accepted and discarded —
+      # measured, and it is how gtfs_rides_agg_by_hour sat frozen at the dump's
+      # last day while the suite stayed green. So assert the thing that was wrong:
+      # applying a changed body changes the database.
+      - name: Expect a changed view body to reach the database
+        run: |
+          interval() {
+            ./clickhouse client --query "
+              SELECT extract(create_table_query, 'REFRESH EVERY [0-9]+ [A-Z]+')
+              FROM system.tables
+              WHERE database='stride' AND name='gtfs_rides_agg_by_hour_refresh'"
+          }
+          before=$(interval)
+          sed 's/REFRESH EVERY 6 HOUR/REFRESH EVERY 7 HOUR/' db/views.sql \
+            | ./clickhouse client --database stride --multiquery
+          after=$(interval)
+          test "$after" = "REFRESH EVERY 7 HOUR" || {
+            echo "view body did not converge: was '$before', applied 7 HOUR, got '$after'"
+            exit 1
+          }
+          ./clickhouse client --database stride --multiquery < db/views.sql
+          test "$(interval)" = "$before" || { echo "did not restore"; exit 1; }
 
   terraform:
     runs-on: ubuntu-latest

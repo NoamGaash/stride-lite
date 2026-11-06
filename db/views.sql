@@ -36,9 +36,15 @@ ORDER BY (gtfs_route_date, gtfs_route_id, gtfs_route_hour);
 -- add to it. `REFRESH EVERY 6 HOUR` matches how often GTFS itself changes,
 -- which is daily.
 --
+-- OR REPLACE and not IF NOT EXISTS, here and in ingest/: measured, a changed
+-- body under IF NOT EXISTS is accepted and silently discarded, so the file and
+-- the database drift with nothing to say so. Replacing triggers one immediate
+-- refresh, which for this view is the same full rebuild it does every 6 hours
+-- and for the APPEND views is a pass their NOT IN makes free.
+--
 -- `full_sorting_merge` rather than the default hash: both sides are large, and
 -- the hash build is exactly what exceeded the memory ceiling.
-CREATE MATERIALIZED VIEW IF NOT EXISTS gtfs_rides_agg_by_hour_refresh
+CREATE OR REPLACE MATERIALIZED VIEW gtfs_rides_agg_by_hour_refresh
 REFRESH EVERY 6 HOUR
 TO gtfs_rides_agg_by_hour
 AS

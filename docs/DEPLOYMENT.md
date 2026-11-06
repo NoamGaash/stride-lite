@@ -331,6 +331,80 @@ repository.
 ingest reads are same-region and therefore free. Running elsewhere adds inter-region transfer
 to every hour of ingest, forever.
 
+### Deploying from CI, and what has to exist first
+
+`.github/workflows/deploy.yml` runs on every push to `main`. It does two things, because they
+are two things and only the first is Terraform's:
+
+1. `terraform plan` and `terraform apply`, which converges the AWS resources above.
+2. `scripts/deploy.sh` on the instance, sent over SSM, which is what actually puts new code
+   there.
+
+The second step is not redundant. `bootstrap.sh` is `user_data`, so it runs once per instance
+launch, and `user_data_replace_on_change = false` is deliberate: a push must not replace the
+instance, because the 400 GB volume and the hours of backfill on it are the expensive part.
+Without step 2 a push would change nothing a user can see. SSM is the channel because it is
+already there — there is no key pair and no open port 22.
+
+Four things have to exist before the first run, and none of them are in this repository
+because three are account-specific and one is an address:
+
+| | What | Why not here |
+| --- | --- | --- |
+| An S3 bucket, versioning on | Terraform state | With local state every CI run starts from nothing and tries to create what exists |
+| IAM user + `infra/deployer-policy.json` | the credentials CI uses | Replace `REPLACE-WITH-STATE-BUCKET` and `REPLACE-WITH-REGION` in it first |
+| Secrets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `BUDGET_EMAIL` | | |
+| Variables `AWS_REGION`, `TF_STATE_BUCKET` | | |
+
+```bash
+aws s3 mb s3://your-bucket --region eu-west-1
+aws s3api put-bucket-versioning --bucket your-bucket \
+  --versioning-configuration Status=Enabled
+```
+
+The workflow names a GitHub environment, `aws`. Putting a required reviewer on it is what
+turns "every push deploys" into "every push asks first", and it is one checkbox.
+
+The policy is scoped where scoping means something: state access is the one bucket and one
+prefix, IAM is `stride-lite-*` only, EC2 is conditioned on the region, and `ssm:SendCommand`
+is conditioned on `Project=stride-lite` so these credentials cannot run a command on any other
+instance in the account. It is broad on `ec2:Describe*` and on CloudFront, because a plan reads
+the account and CloudFront's API carries no useful resource conditions. **An access key is a
+long-lived credential**; GitHub's OIDC provider with a role to assume removes it entirely and
+is the better answer once the first deploy works.
+
+### Schema changes
+
+Three kinds, and only one of them needs a migration.
+
+| Change | How it reaches a running database |
+| --- | --- |
+| A new table | `db/schema.sql`, `CREATE TABLE IF NOT EXISTS` — appears on the next deploy |
+| Any view, including the refreshable ones | `CREATE OR REPLACE`, so the file is always what the database holds |
+| A change to a table that already holds data | a numbered file in `db/migrations/`, run once, recorded in `schema_migrations` |
+
+The second row is a correction, not a design. These were `CREATE MATERIALIZED VIEW IF NOT
+EXISTS`, and measured on ClickHouse 26.10 a changed body under `IF NOT EXISTS` is **accepted
+and silently discarded** — no error, no warning, and the file and the database drift apart with
+nothing to say so. That is exactly how `gtfs_rides_agg_by_hour` sat frozen at the dump's last
+day while the differential suite stayed green. CI now asserts the opposite: it applies a
+changed view body and fails if the database does not take it.
+
+Two measurements that made `CREATE OR REPLACE` safe to use here rather than assumed to be:
+
+- On an **APPEND** refreshable view it preserves the target. A target holding 3 rows held 5
+  after a replace — the originals plus one immediate refresh — and every view in the ingest and
+  enrichment chains is idempotent by `NOT IN`, so that extra pass writes nothing.
+- On a **non-APPEND** one it replaces the target's contents, because that is what a refresh of
+  such a view does. The only one here is `gtfs_rides_agg_by_hour_refresh`, whose refresh is a
+  92-second full rebuild it performs every 6 hours regardless.
+- Replacing a view that others `DEPENDS ON` keeps the dependency: the dependent still declares
+  it afterwards and both stay `Scheduled`.
+
+Tables cannot work that way, because they hold the data. `db/migrations/README.md` has the
+three rules; the one that matters is that ClickHouse DDL has no transaction and no rollback, so
+each statement is written to be safe to re-run after a failure half way.
+
 **What is deliberately not here:** no RDS, no managed ClickHouse, no Kubernetes, no message
 queue, no Redis, no Airflow. The scheduler is `REFRESH EVERY` inside the database and the
 monitoring is `system.view_refreshes`.

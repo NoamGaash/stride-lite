@@ -1,0 +1,123 @@
+name: deploy
+
+# Two steps, because they are two different things and only the first is
+# Terraform's. `terraform apply` converges the AWS resources; it does not put new
+# code on a running instance, because bootstrap.sh is user_data with
+# `user_data_replace_on_change = false` and so runs once per launch. Replacing the
+# instance on every push would destroy the data volume's backfill, which is the
+# expensive part. So the second step sends scripts/deploy.sh over SSM — the same
+# channel that exists because there is no key pair and no open port 22.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One deploy at a time, and never cancelled half way: an interrupted apply leaves
+# state and reality disagreeing, and an interrupted deploy leaves a node between
+# two commits.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Set this environment up with a required reviewer to gate what reaches AWS.
+    environment: aws
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.4
+
+      - name: init
+        working-directory: infra
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ vars.AWS_REGION }}"
+
+      - name: plan
+        working-directory: infra
+        run: |
+          terraform plan -input=false -out=tfplan \
+            -var "region=${{ vars.AWS_REGION }}" \
+            -var "budget_email=${{ secrets.BUDGET_EMAIL }}"
+
+      - name: apply
+        working-directory: infra
+        run: terraform apply -input=false -auto-approve tfplan
+
+      - name: id of the instance to deploy to
+        id: target
+        working-directory: infra
+        run: echo "instance=$(terraform output -raw instance_id)" >> "$GITHUB_OUTPUT"
+
+      # A fresh instance is still running bootstrap.sh, which ends by writing this
+      # file. Deploying into a half-bootstrapped node would race the schema.
+      - name: wait for the node to finish bootstrapping
+        run: |
+          for _ in $(seq 1 60); do
+            state=$(aws ssm describe-instance-information \
+              --filters "Key=InstanceIds,Values=${{ steps.target.outputs.instance }}" \
+              --query 'InstanceInformationList[0].PingStatus' --output text 2>/dev/null || true)
+            [ "$state" = "Online" ] && break
+            sleep 10
+          done
+          test "$state" = "Online"
+
+      - name: send the deploy
+        id: send
+        run: |
+          id=$(aws ssm send-command \
+            --instance-ids "${{ steps.target.outputs.instance }}" \
+            --document-name AWS-RunShellScript \
+            --comment "deploy ${GITHUB_SHA::7}" \
+            --timeout-seconds 3600 \
+            --parameters commands='["BRANCH=main /opt/stride-lite/scripts/deploy.sh"]' \
+            --query 'Command.CommandId' --output text)
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+
+      # send-command returns as soon as the command is queued, so the run would go
+      # green on a deploy that failed. This is what makes the result mean something.
+      - name: wait for it, and fail on its exit code
+        run: |
+          for _ in $(seq 1 180); do
+            status=$(aws ssm get-command-invocation \
+              --command-id "${{ steps.send.outputs.id }}" \
+              --instance-id "${{ steps.target.outputs.instance }}" \
+              --query Status --output text)
+            case "$status" in
+              Success|Failed|Cancelled|TimedOut) break ;;
+            esac
+            sleep 20
+          done
+          aws ssm get-command-invocation \
+            --command-id "${{ steps.send.outputs.id }}" \
+            --instance-id "${{ steps.target.outputs.instance }}" \
+            --query 'StandardOutputContent' --output text
+          aws ssm get-command-invocation \
+            --command-id "${{ steps.send.outputs.id }}" \
+            --instance-id "${{ steps.target.outputs.instance }}" \
+            --query 'StandardErrorContent' --output text >&2
+          test "$status" = Success
+
+      - name: the API answers
+        working-directory: infra
+        run: |
+          url=$(terraform output -raw api_url)
+          for _ in $(seq 1 30); do
+            curl -fsS "$url/healthz" && break
+            sleep 10
+          done
+          curl -fsS "$url/healthz"

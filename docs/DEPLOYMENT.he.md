@@ -315,6 +315,76 @@ terraform apply -var budget_email=you@example.org
 **אזור: eu-west-1**, ולא מתוך העדפה — ארכיון ה-SIRI כבר נמצא בבאקט הזה, ולכן קריאות ה-ingest
 הן באותו אזור ועל כן חינמיות. הרצה במקום אחר מוסיפה העברה בין-אזורית לכל שעה של ingest, לתמיד.
 
+### פריסה מה-CI, ומה צריך להתקיים קודם
+
+`.github/workflows/deploy.yml` רץ על כל push ל-`main`. הוא עושה שני דברים, כי אלה שני דברים
+ורק הראשון הוא של Terraform:
+
+1. `terraform plan` ו-`terraform apply`, שמביאים את משאבי AWS שלמעלה למצב הרצוי.
+2. `scripts/deploy.sh` על המכונה, נשלח דרך SSM, וזה מה שבאמת מעלה לשם קוד חדש.
+
+הצעד השני אינו מיותר. `bootstrap.sh` הוא `user_data`, כלומר הוא רץ פעם אחת לכל עליית מכונה,
+ו-`user_data_replace_on_change = false` נבחר בכוונה: push לא אמור להחליף את המכונה, כי
+ה-volume של 400 GB והשעות של ה-backfill שעליו הם החלק היקר. בלי צעד 2 ה-push לא היה משנה
+שום דבר שמשתמש רואה. SSM הוא הערוץ כי הוא כבר שם — אין key pair ואין פורט 22 פתוח.
+
+ארבעה דברים חייבים להתקיים לפני ההרצה הראשונה, ואף אחד מהם אינו בריפו הזה, כי שלושה מהם
+תלויי חשבון ואחד הוא כתובת:
+
+| | מה | למה לא כאן |
+| --- | --- | --- |
+| דלי S3 עם versioning | ה-state של Terraform | עם state מקומי כל ריצת CI מתחילה מאפס ומנסה ליצור את מה שקיים |
+| משתמש IAM עם `infra/deployer-policy.json` | ההרשאות שה-CI משתמש בהן | להחליף בו קודם את `REPLACE-WITH-STATE-BUCKET` ו-`REPLACE-WITH-REGION` |
+| Secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `BUDGET_EMAIL` | | |
+| Variables: `AWS_REGION`, `TF_STATE_BUCKET` | | |
+
+```bash
+aws s3 mb s3://your-bucket --region eu-west-1
+aws s3api put-bucket-versioning --bucket your-bucket \
+  --versioning-configuration Status=Enabled
+```
+
+ה-workflow מצביע על GitHub environment בשם `aws`. הגדרת reviewer נדרש עליו היא מה שהופך
+"כל push נפרס" ל-"כל push מבקש אישור", וזה checkbox אחד.
+
+ההרשאות מוגבלות במקומות שבהם להגבלה יש משמעות: גישה ל-state היא דלי אחד ו-prefix אחד, IAM
+הוא `stride-lite-*` בלבד, EC2 מותנה באזור, ו-`ssm:SendCommand` מותנה ב-`Project=stride-lite`
+כך שההרשאות האלה לא יכולות להריץ פקודה על שום מכונה אחרת בחשבון. הן רחבות ב-`ec2:Describe*`
+וב-CloudFront, כי plan קורא את החשבון ול-API של CloudFront אין תנאי משאב שימושיים. **access
+key הוא credential ארוך־חיים**; ה-OIDC של GitHub עם role להיכנס אליו מבטל אותו לגמרי, וזו
+התשובה הנכונה יותר אחרי שהפריסה הראשונה עובדת.
+
+### שינויים בסכמה
+
+שלושה סוגים, ורק אחד מהם צריך מיגרציה.
+
+| שינוי | איך הוא מגיע למסד שרץ |
+| --- | --- |
+| טבלה חדשה | `db/schema.sql`, `CREATE TABLE IF NOT EXISTS` — מופיעה בפריסה הבאה |
+| כל view, כולל ה-refreshable | `CREATE OR REPLACE`, כך שהקובץ הוא תמיד מה שבמסד |
+| שינוי בטבלה שכבר מחזיקה נתונים | קובץ ממוספר ב-`db/migrations/`, רץ פעם אחת, נרשם ב-`schema_migrations` |
+
+השורה השנייה היא תיקון, לא תכנון. הם היו `CREATE MATERIALIZED VIEW IF NOT EXISTS`, ונמדד
+על ClickHouse 26.10 שגוף שהשתנה תחת `IF NOT EXISTS` **מתקבל ונזרק בשקט** — בלי שגיאה, בלי
+אזהרה, והקובץ והמסד נפרדים זה מזה בלי שדבר יאמר זאת. זה בדיוק איך ש-`gtfs_rides_agg_by_hour`
+נשאר קפוא ביום האחרון של הדאמפ בזמן שחבילת ההשוואה נשארה ירוקה. ה-CI בודק עכשיו את ההפך:
+הוא מחיל גוף view שהשתנה ונכשל אם המסד לא מקבל אותו.
+
+שתי מדידות שהפכו את `CREATE OR REPLACE` לבטוח כאן ולא למשהו שהונח:
+
+- על view מסוג **APPEND** הוא שומר על טבלת היעד. יעד עם 3 שורות החזיק 5 אחרי החלפה — המקוריות
+  ועוד refresh מיידי אחד — וכל view בשרשראות הקליטה וה-enrichment הוא אידמפוטנטי דרך `NOT IN`,
+  אז המעבר הנוסף לא כותב כלום.
+- על view **ללא APPEND** הוא מחליף את תוכן היעד, כי זה מה ש-refresh של view כזה עושה. היחיד
+  כאן הוא `gtfs_rides_agg_by_hour_refresh`, שה-refresh שלו הוא בנייה מחדש של 92 שניות שהוא
+  מבצע כל 6 שעות בכל מקרה.
+- החלפת view שאחרים `DEPENDS ON` עליו שומרת על התלות: התלוי עדיין מצהיר עליה אחר כך ושניהם
+  נשארים `Scheduled`.
+
+טבלאות לא יכולות לעבוד כך, כי הן מחזיקות את הנתונים. ב-`db/migrations/README.md` שלושת
+הכללים; זה שחשוב הוא של-DDL של ClickHouse אין טרנזקציה ואין rollback, ולכן כל פקודה נכתבת
+כך שאפשר להריץ אותה שוב אחרי כשל באמצע.
+
 **מה שבכוונה אינו כאן:** בלי RDS, בלי ClickHouse מנוהל, בלי Kubernetes, בלי תור הודעות, בלי
 Redis, בלי Airflow. ה-scheduler הוא `REFRESH EVERY` בתוך מסד הנתונים והניטור הוא
 `system.view_refreshes`.
