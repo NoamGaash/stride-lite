@@ -89,8 +89,17 @@ jobs:
           n=$(./clickhouse client --query "SELECT count() FROM system.projections WHERE database='stride'")
           test "$n" = 4 || { echo "got $n projections, want 4"; exit 1; }
 
+      # The ingest views refresh a minute after they are created and then every
+      # minute, and they really do fetch from S3, so by this point the landing
+      # table may hold an hour of live snapshots. This test is about the
+      # enrichment and not about them: stop them and clear what they brought, or
+      # the assertion below passes or fails on how long the steps above took.
       - name: Expect the enrichment to be idempotent on an empty feed
         run: |
+          ./clickhouse client --query "SYSTEM STOP VIEW stride.siri_ingest_current"
+          ./clickhouse client --query "SYSTEM STOP VIEW stride.siri_ingest_previous"
+          ./clickhouse client --query "TRUNCATE TABLE stride.siri_vehicle_location_raw"
+          ./clickhouse client --query "TRUNCATE TABLE stride.siri_vehicle_location"
           ./clickhouse client --database stride --multiquery < ingest/enrich-once.sql
           n=$(./clickhouse client --query "SELECT count() FROM stride.siri_vehicle_location")
           test "$n" = 0 || { echo "enrichment invented $n rows from an empty feed"; exit 1; }
