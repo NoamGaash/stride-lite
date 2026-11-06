@@ -21,13 +21,17 @@ concurrency:
 
 permissions:
   contents: read
+  # The OIDC token this job trades for AWS credentials. Without it the exchange
+  # fails with a token-not-available error that says nothing about permissions.
+  id-token: write
 
 jobs:
   deploy:
     # Until an account is configured there is nothing to deploy to, and a red
     # main would be reporting the absence of a bucket as a broken build. Setting
-    # the TF_STATE_BUCKET variable is what turns this on.
-    if: vars.TF_STATE_BUCKET != ''
+    # both variables is what turns this on; gating on both means a half-finished
+    # setup skips rather than failing somewhere in the middle.
+    if: vars.TF_STATE_BUCKET != '' && vars.AWS_ROLE_ARN != ''
     runs-on: ubuntu-latest
     # Set this environment up with a required reviewer to gate what reaches AWS.
     environment: aws
@@ -40,10 +44,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # No access key anywhere, in this repository or in its settings. The job
+      # presents the OIDC token GitHub mints for it and gets credentials that
+      # expire with the run, which is why infra/github-oidc-trust.json pins the
+      # repository by numeric id: a token from anywhere else does not match.
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-session-name: deploy-${{ github.run_id }}
           aws-region: ${{ env.AWS_REGION }}
 
       - uses: hashicorp/setup-terraform@v3

@@ -353,16 +353,55 @@ Without step 2 a push would change nothing a user can see. SSM is the channel be
 already there — there is no key pair and no open port 22.
 
 Four things have to exist before the first run, and none of them are in this repository
-because three are account-specific and one is an address:
+because they are account-specific:
 
 | | What |
 | --- | --- |
 | An S3 bucket named `stride-lite-tfstate-<account-id>` | Terraform state. With local state every CI run starts from nothing and tries to create what exists |
-| An IAM user carrying `infra/deployer-policy.json` | The credentials CI uses. Nothing in it to fill in — the bucket name is matched by the convention above and the region is the one `infra/main.tf` defaults to |
-| Secrets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | From that user |
-| Variable `TF_STATE_BUCKET` | The bucket's full name, as a repository **variable**, not a secret:
-the workflow gates on `vars.TF_STATE_BUCKET`, so a value put in secrets leaves the job skipping
-silently. `AWS_REGION` is optional — unset, the workflow uses `us-east-1` |
+| GitHub as an OIDC identity provider in the account | One entry, shared by anything this account ever trusts GitHub for |
+| A role trusting `infra/github-oidc-trust.json`, carrying `infra/deployer-policy.json` | What CI becomes. There is no access key, here or in the repository settings |
+| Variables `TF_STATE_BUCKET` and `AWS_ROLE_ARN` | Repository **variables**, not secrets: the workflow gates on both, so a value put in secrets leaves the job skipping silently. `AWS_REGION` is optional — unset, the workflow uses `us-east-1` |
+
+**There are no secrets to set.** The job presents the token GitHub mints for it and gets
+credentials that expire when the run ends, so there is nothing to rotate, nothing to leak and
+nothing to remember to delete. An access key would work too, and is what this started as; it is
+a long-lived credential for an account, and the reason to prefer it was never a good one.
+
+Two details decide whether the trust policy matches, and both fail the same silent way —
+`AssumeRoleWithWebIdentity` is simply not authorized, with nothing said about which claim
+disagreed:
+
+- **The job names an environment, so `sub` ends in `:environment:aws`**, not
+  `:ref:refs/heads/main`. A trust policy written around the branch never matches.
+- **A repository created after 2026-07-15 gets the immutable `sub` format**,
+  `repo:OWNER@OWNER-ID/REPO@REPO-ID:...`. This one was created 2026-11-03, so that is the form
+  it sends. The trust policy accepts both spellings of the same repository and pins it by
+  numeric id, which no rename can change.
+
+Setting it up, with the account id derived rather than filled in:
+
+```bash
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+
+# IAM fetches the provider's certificate thumbprint itself; only the URL is required.
+aws iam create-open-id-connect-provider \
+  --url https://token.actions.githubusercontent.com \
+  --client-id-list sts.amazonaws.com
+
+sed "s|\${ACCOUNT}|$ACCOUNT|" infra/github-oidc-trust.json > /tmp/trust.json
+aws iam create-role --role-name GitHubActionsStrideLiteDeployer \
+  --assume-role-policy-document file:///tmp/trust.json
+aws iam put-role-policy --role-name GitHubActionsStrideLiteDeployer \
+  --policy-name StrideLiteTerraformDeployer \
+  --policy-document file://infra/deployer-policy.json
+
+aws iam get-role --role-name GitHubActionsStrideLiteDeployer \
+  --query Role.Arn --output text   # this is the AWS_ROLE_ARN variable
+```
+
+**The role's name deliberately does not start with `stride-lite-`.** `deployer-policy.json`
+grants `iam:DeleteRole` over `role/stride-lite-*`, so a role named inside that prefix would be
+able to delete itself.
 
 The bucket is named after the account rather than freely, because S3 bucket names are globally
 unique: a fixed name would already be taken, and a free one would be a value the policy cannot
@@ -391,9 +430,9 @@ The policy is scoped where scoping means something: state access is the one buck
 prefix, IAM is `stride-lite-*` only, EC2 is conditioned on the region, and `ssm:SendCommand`
 is conditioned on `Project=stride-lite` so these credentials cannot run a command on any other
 instance in the account. It is broad on `ec2:Describe*` and on CloudFront, because a plan reads
-the account and CloudFront's API carries no useful resource conditions. **An access key is a
-long-lived credential**; GitHub's OIDC provider with a role to assume removes it entirely and
-is the better answer once the first deploy works.
+the account and CloudFront's API carries no useful resource conditions. What it is not scoped
+by is time, and it does not need to be: the credentials the role hands out last as long as the
+run and the trust policy admits one repository.
 
 ### What the first deploy leaves you with
 

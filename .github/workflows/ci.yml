@@ -144,7 +144,7 @@ jobs:
       # silently missing until an apply fails on it.
       - name: Expect every IAM action in the deployer policy to exist
         working-directory: .
-        run: python3 scripts/check-iam-actions.py infra/deployer-policy.json
+        run: python3 scripts/check-iam-actions.py infra/deployer-policy.json infra/github-oidc-trust.json
 
   differential:
     # Compares endpoints against the live production API, which is a non-profit's

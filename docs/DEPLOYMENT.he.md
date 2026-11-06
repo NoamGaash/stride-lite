@@ -332,17 +332,53 @@ terraform apply -var budget_email=you@example.org
 ה-volume של 400 GB והשעות של ה-backfill שעליו הם החלק היקר. בלי צעד 2 ה-push לא היה משנה
 שום דבר שמשתמש רואה. SSM הוא הערוץ כי הוא כבר שם — אין key pair ואין פורט 22 פתוח.
 
-ארבעה דברים חייבים להתקיים לפני ההרצה הראשונה, ואף אחד מהם אינו בריפו הזה, כי שלושה מהם
-תלויי חשבון ואחד הוא כתובת:
+ארבעה דברים חייבים להתקיים לפני ההרצה הראשונה, ואף אחד מהם אינו בריפו הזה, כי כולם
+תלויי חשבון:
 
 | | מה |
 | --- | --- |
 | דלי S3 בשם `stride-lite-tfstate-<account-id>` | ה-state של Terraform. עם state מקומי כל ריצת CI מתחילה מאפס ומנסה ליצור את מה שקיים |
-| משתמש IAM שנושא את `infra/deployer-policy.json` | ההרשאות שה-CI משתמש בהן. אין בו מה למלא — שם הדלי נתפס על ידי המוסכמה שלמעלה והאזור הוא זה שב-`infra/main.tf` כברירת מחדל |
-| Secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | מאותו משתמש |
-| Variable: `TF_STATE_BUCKET` | השם המלא של הדלי, כ-**variable** של הריפו ולא כ-secret:
-ה-workflow בודק `vars.TF_STATE_BUCKET`, ולכן ערך שהוגדר כ-secret משאיר את ה-job מדלג בשקט.
-`AWS_REGION` אופציונלי — בלעדיו ה-workflow משתמש ב-`us-east-1` |
+| GitHub כ-OIDC identity provider בחשבון | רשומה אחת, משותפת לכל מה שהחשבון הזה יבטח ב-GitHub לגביו בעתיד |
+| Role שנושא את `infra/github-oidc-trust.json` כ-trust ואת `infra/deployer-policy.json` כהרשאות | מה שה-CI הופך להיות. אין access key, לא כאן ולא בהגדרות הריפו |
+| Variables: `TF_STATE_BUCKET` ו-`AWS_ROLE_ARN` | **variables** של הריפו ולא secrets: ה-workflow בודק את שניהם, ולכן ערך שהוגדר כ-secret משאיר את ה-job מדלג בשקט. `AWS_REGION` אופציונלי — בלעדיו ה-workflow משתמש ב-`us-east-1` |
+
+**אין שום secret להגדיר.** ה-job מציג את ה-token ש-GitHub מנפיק לו ומקבל credentials שתוקפם
+נגמר עם הריצה — אין מה לסובב, אין מה לדלוף, ואין מה לזכור למחוק. access key היה עובד גם,
+וזה מה שזה היה בהתחלה; הוא credential ארוך-חיים לחשבון, והנימוק להעדיף אותו מעולם לא היה טוב.
+
+שני פרטים מכריעים אם ה-trust policy מתאים, ושניהם נכשלים באותה צורה שקטה — פשוט אין הרשאה
+ל-`AssumeRoleWithWebIdentity`, בלי לומר איזה claim לא הסכים:
+
+- **ה-job מצהיר על environment, ולכן ה-`sub` מסתיים ב-`:environment:aws`** ולא
+  ב-`:ref:refs/heads/main`. trust policy שנכתב סביב הענף לא יתאים אף פעם.
+- **ריפו שנוצר אחרי 15/07/2026 מקבל את פורמט ה-`sub` ה-immutable**,
+  `repo:OWNER@OWNER-ID/REPO@REPO-ID:...`. הריפו הזה נוצר ב-03/11/2026, אז זו הצורה שהוא שולח.
+  ה-trust policy מקבל את שני האיומים של אותו ריפו ונועץ אותו לפי מזהה מספרי, שאף שינוי שם
+  לא משנה.
+
+ההקמה, כשה-account id נגזר ולא ממולא ביד:
+
+```bash
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+
+# IAM מביא את ה-thumbprint של התעודה בעצמו; רק ה-URL חובה.
+aws iam create-open-id-connect-provider \
+  --url https://token.actions.githubusercontent.com \
+  --client-id-list sts.amazonaws.com
+
+sed "s|\${ACCOUNT}|$ACCOUNT|" infra/github-oidc-trust.json > /tmp/trust.json
+aws iam create-role --role-name GitHubActionsStrideLiteDeployer \
+  --assume-role-policy-document file:///tmp/trust.json
+aws iam put-role-policy --role-name GitHubActionsStrideLiteDeployer \
+  --policy-name StrideLiteTerraformDeployer \
+  --policy-document file://infra/deployer-policy.json
+
+aws iam get-role --role-name GitHubActionsStrideLiteDeployer \
+  --query Role.Arn --output text   # זה ה-variable בשם AWS_ROLE_ARN
+```
+
+**שם ה-role בכוונה לא מתחיל ב-`stride-lite-`.** `deployer-policy.json` מעניק `iam:DeleteRole`
+על `role/stride-lite-*`, ולכן role ששמו בתוך התחילית הזאת היה יכול למחוק את עצמו.
 
 הדלי נקרא על שם החשבון ולא בחופשיות, כי שמות דליים ב-S3 ייחודיים גלובלית: שם קבוע היה כבר
 תפוס, ושם חופשי היה ערך שה-policy לא יכול לדעת. לכן ה-policy מוגבל ל-`stride-lite-tfstate-*`,
@@ -368,9 +404,9 @@ echo "$BUCKET"   # זה ה-variable בשם TF_STATE_BUCKET
 ההרשאות מוגבלות במקומות שבהם להגבלה יש משמעות: גישה ל-state היא דלי אחד ו-prefix אחד, IAM
 הוא `stride-lite-*` בלבד, EC2 מותנה באזור, ו-`ssm:SendCommand` מותנה ב-`Project=stride-lite`
 כך שההרשאות האלה לא יכולות להריץ פקודה על שום מכונה אחרת בחשבון. הן רחבות ב-`ec2:Describe*`
-וב-CloudFront, כי plan קורא את החשבון ול-API של CloudFront אין תנאי משאב שימושיים. **access
-key הוא credential ארוך־חיים**; ה-OIDC של GitHub עם role להיכנס אליו מבטל אותו לגמרי, וזו
-התשובה הנכונה יותר אחרי שהפריסה הראשונה עובדת.
+וב-CloudFront, כי plan קורא את החשבון ול-API של CloudFront אין תנאי משאב שימושיים. מה שהן
+לא מוגבלות בו הוא זמן, וגם לא צריך: ה-credentials שה-role מנפיק חיים כאורך הריצה, וה-trust
+policy מכיר בריפו אחד.
 
 ### מה ה-deploy הראשון משאיר לך
 
