@@ -426,7 +426,7 @@ serves ministry data that is already public — and so is the data.
 | | Why it is safe |
 | --- | --- |
 | `terraform plan` output, as a job summary or a PR comment | It is a diff of resource attributes, and the only personal value in this config is `budget_email`, now `sensitive` |
-| Ingest freshness from `system.view_refreshes` and the newest snapshot id | Operational state with nothing secret in it, and the thing a reader actually wants: is the data current |
+| `GET /status` — ingest freshness from `system.view_refreshes` and the newest snapshot id | Operational state with nothing secret in it, and the thing a reader actually wants: is the data current. Measured at 55 ms, behind the CDN |
 | `infra/rates.json` and `scripts/measure-cost.py` | Public rates and a script. An estimate nobody can re-derive is one nobody should act on |
 
 **The state bucket stays private, and the honest reason is not secrets.** This configuration

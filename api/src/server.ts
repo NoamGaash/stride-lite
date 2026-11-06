@@ -5,6 +5,7 @@ import { query, scalar, lit, ClickHouseError } from './ch'
 import { buildQuery, BadRequest, BadInput, TzRequired, UnknownOrderField } from './sql'
 import { endpoints, getEndpoints } from './registry'
 import { rawEndpoints, wrap, type RawEndpointDef } from './raw'
+import { statusSql } from './status'
 
 const PORT = Number(process.env.PORT ?? 8080)
 const HOST = process.env.HOST ?? '0.0.0.0'
@@ -134,6 +135,13 @@ const server = createServer(async (req, res) => {
 
   try {
     if (url.pathname === '/healthz') return await send(200, { ok: true })
+
+    // Public on purpose; see src/status.ts. Measured at 78 ms, and the CDN in
+    // front caches it, so it is not a way to make the database work.
+    if (url.pathname === '/status') {
+      const [row] = await query(statusSql(DB))
+      return await send(200, row ?? {})
+    }
 
     const listDef = byPath.get(url.pathname)
     if (listDef) {

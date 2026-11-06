@@ -52,6 +52,9 @@ results as production.
 | **Where production has a bug, fixing it justifies departing from byte-for-byte** | Inheriting a defect to make a comparison pass — see finding 13 in [docs/FINDINGS.md](docs/FINDINGS.md) |
 | **Install whatever is needed to run things.** The session is in a container | Verifying by reading source what could have been executed |
 | **A test for a fix must be shown failing without the fix** | A test committed on the strength of passing once |
+| **Open by default, in the Workshop's spirit.** Publish anything that does not expose a third party; the owner's own email and the S3 GET bill are his to spend | Redacting the budget address, and the argument that a public bucket is unsafe because of its cost |
+| **Cheapest wins, some performance loss is acceptable** | eu-west-1 for same-region reads, and m7g over a burstable instance |
+| **Data quality in the ministry's feed is a public finding, not an embarrassment to hide** | Quietly working around the 2038 timestamps instead of writing them up — see finding 14 |
 | A **public repository**, no secrets, Hebrew and English documentation | — |
 | **AI agents must identify themselves** when acting in the project (the repo's own rule) | — |
 
