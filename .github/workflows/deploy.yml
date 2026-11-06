@@ -24,6 +24,10 @@ permissions:
 
 jobs:
   deploy:
+    # Until an account is configured there is nothing to deploy to, and a red
+    # main would be reporting the absence of a bucket as a broken build. Setting
+    # the TF_STATE_BUCKET variable is what turns this on.
+    if: vars.TF_STATE_BUCKET != ''
     runs-on: ubuntu-latest
     # Set this environment up with a required reviewer to gate what reaches AWS.
     environment: aws
