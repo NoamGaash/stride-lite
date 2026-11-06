@@ -340,7 +340,9 @@ terraform apply -var budget_email=you@example.org
 | דלי S3 בשם `stride-lite-tfstate-<account-id>` | ה-state של Terraform. עם state מקומי כל ריצת CI מתחילה מאפס ומנסה ליצור את מה שקיים |
 | משתמש IAM שנושא את `infra/deployer-policy.json` | ההרשאות שה-CI משתמש בהן. אין בו מה למלא — שם הדלי נתפס על ידי המוסכמה שלמעלה והאזור הוא זה שב-`infra/main.tf` כברירת מחדל |
 | Secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | מאותו משתמש |
-| Variable: `TF_STATE_BUCKET` | השם המלא של הדלי. `AWS_REGION` אופציונלי — בלעדיו ה-workflow משתמש ב-`us-east-1` |
+| Variable: `TF_STATE_BUCKET` | השם המלא של הדלי, כ-**variable** של הריפו ולא כ-secret:
+ה-workflow בודק `vars.TF_STATE_BUCKET`, ולכן ערך שהוגדר כ-secret משאיר את ה-job מדלג בשקט.
+`AWS_REGION` אופציונלי — בלעדיו ה-workflow משתמש ב-`us-east-1` |
 
 הדלי נקרא על שם החשבון ולא בחופשיות, כי שמות דליים ב-S3 ייחודיים גלובלית: שם קבוע היה כבר
 תפוס, ושם חופשי היה ערך שה-policy לא יכול לדעת. לכן ה-policy מוגבל ל-`stride-lite-tfstate-*`,

@@ -139,6 +139,12 @@ jobs:
       - run: terraform fmt -check -recursive
       - run: terraform init -backend=false
       - run: terraform validate
+      # terraform validate does not look at the IAM policy, and IAM accepts an
+      # action name it does not define, so a typo there is a permission that is
+      # silently missing until an apply fails on it.
+      - name: Expect every IAM action in the deployer policy to exist
+        working-directory: .
+        run: python3 scripts/check-iam-actions.py infra/deployer-policy.json
 
   differential:
     # Compares endpoints against the live production API, which is a non-profit's

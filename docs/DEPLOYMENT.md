@@ -360,7 +360,9 @@ because three are account-specific and one is an address:
 | An S3 bucket named `stride-lite-tfstate-<account-id>` | Terraform state. With local state every CI run starts from nothing and tries to create what exists |
 | An IAM user carrying `infra/deployer-policy.json` | The credentials CI uses. Nothing in it to fill in — the bucket name is matched by the convention above and the region is the one `infra/main.tf` defaults to |
 | Secrets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | From that user |
-| Variable `TF_STATE_BUCKET` | The bucket's full name. `AWS_REGION` is optional — unset, the workflow uses `us-east-1` |
+| Variable `TF_STATE_BUCKET` | The bucket's full name, as a repository **variable**, not a secret:
+the workflow gates on `vars.TF_STATE_BUCKET`, so a value put in secrets leaves the job skipping
+silently. `AWS_REGION` is optional — unset, the workflow uses `us-east-1` |
 
 The bucket is named after the account rather than freely, because S3 bucket names are globally
 unique: a fixed name would already be taken, and a free one would be a value the policy cannot

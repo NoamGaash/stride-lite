@@ -29,8 +29,7 @@
         "cloudfront:GetDistributionConfig",
         "cloudfront:ListDistributions",
         "cloudfront:ListTagsForResource",
-        "budgets:ViewBudget",
-        "budgets:DescribeBudget*"
+        "budgets:ViewBudget"
       ],
       "Resource": "*"
     },
@@ -98,9 +97,10 @@
         "cloudfront:DeleteDistribution",
         "cloudfront:TagResource",
         "cloudfront:UntagResource",
-        "budgets:CreateBudget",
         "budgets:ModifyBudget",
-        "budgets:DeleteBudget"
+        "budgets:ListTagsForResource",
+        "budgets:TagResource",
+        "budgets:UntagResource"
       ],
       "Resource": "*"
     },
@@ -111,18 +111,21 @@
       "Resource": "*"
     },
     {
-      "Sid": "RunOnlyTheDeployScriptOnOnlyThisProject",
+      "Sid": "RunTheDeployScriptOnOnlyThisProjectsInstance",
       "Effect": "Allow",
       "Action": ["ssm:SendCommand"],
-      "Resource": [
-        "arn:aws:ssm:*::document/AWS-RunShellScript",
-        "arn:aws:ec2:*:*:instance/*"
-      ],
+      "Resource": "arn:aws:ec2:*:*:instance/*",
       "Condition": {
         "StringEquals": {
           "ssm:resourceTag/Project": "stride-lite"
         }
       }
+    },
+    {
+      "Sid": "AndOnlyThroughTheShellScriptDocument",
+      "Effect": "Allow",
+      "Action": ["ssm:SendCommand"],
+      "Resource": "arn:aws:ssm:*::document/AWS-RunShellScript"
     },
     {
       "Sid": "ReadBackWhatTheCommandPrinted",
