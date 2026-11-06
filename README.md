@@ -49,6 +49,7 @@ results as production.
 | **Availability is not a requirement.** Days of downtime are acceptable because the requesters keep writing to S3 and everything else is derived | Backups, snapshots, failover and health alarms — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
 | **Deletion is not irreversible** where the output is reproducible with compute | Treating 208 GB of intermediate files as precious |
 | What the project pays today is **private**; estimates from public rates are fine | Any comparison quoting the real invoice |
+| **Where production has a bug, fixing it justifies departing from byte-for-byte** | Inheriting a defect to make a comparison pass — see finding 13 in [docs/FINDINGS.md](docs/FINDINGS.md) |
 | **Install whatever is needed to run things.** The session is in a container | Verifying by reading source what could have been executed |
 | **A test for a fix must be shown failing without the fix** | A test committed on the strength of passing once |
 | A **public repository**, no secrets, Hebrew and English documentation | — |

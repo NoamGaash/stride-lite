@@ -227,6 +227,41 @@ anywhere in the stack --- in egress, in latency, and on mobile data.
 
 ---
 
+## 13. Ride durations are missing for about twenty months, and will stay missing
+
+`siri_ride.duration_minutes` is written by `stride-etl-siri-add-ride-durations`, which the
+project describes as running every hour and repopulating all ride durations. Sampled one hour
+per date against live production on 2026-11-05, 100 rides each:
+
+| Date | Rides with a duration |
+| --- | --- |
+| 2024-09-01 | 100 / 100 |
+| 2024-11-01 | **0 / 100** |
+| 2025-06-01 | **0 / 200** |
+| 2026-06-01 | **0 / 200** |
+| 2026-07-01 | 99 / 100 |
+| 2026-11-01 | 200 / 200 |
+
+The dump dates the decline precisely, by month of 2024: 2,929,417 of 2,929,417 rides in
+September, 609,298 of 2,485,854 in October, 147,693 of 2,785,949 in November, and **7 of
+3,086,370 in December**. All of 2025 is zero.
+
+It will not recover on its own. `main(num_days=4)` processes a trailing four-day window, and
+the `UPDATE` is gated on `updated_duration_minutes IS NULL`, so a ride older than the window
+is never reconsidered. The hourly task keeps today's data correct and cannot reach back.
+
+**A second, separate defect in the same file.** `SET_DURATION_OLD_TRIPS` writes
+`duration_minutes = 0` for any ride still without locations two days on, which makes "no data"
+indistinguishable from "a ride that lasted zero minutes". Measured in production: 5 of 200
+sampled rides on 2024-06-01, so 2.5% of a day where coverage is otherwise complete.
+
+Nothing here is a heuristic — it is one `UPDATE` with window functions over each ride's own
+locations, three clock rules, and two `NOW()` bookkeeping columns. Reproducing it is an
+aggregation, measured at 0.087 s for a whole day, which is why this implementation computes it
+for the whole history instead of inheriting the gap.
+
+---
+
 ## Reporting these
 
 These are observations from outside, and some may have a reason we cannot see
