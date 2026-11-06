@@ -163,9 +163,19 @@ const server = createServer(async (req, res) => {
     if (getDef) {
       const id = url.searchParams.get('id')
       if (id === null || !/^-?\d+$/.test(id)) throw new BadRequest('id is required')
-      const select = getDef.fields.map((f) => `\`${f}\``).join(', ')
+      const own = getDef.alias ? `${getDef.alias}.` : ''
+      const select = [
+        ...getDef.fields.map((f) => `${own}\`${f}\` AS \`${f}\``),
+        ...(getDef.related ?? []).flatMap((r) =>
+          r.fields.map((f) => `${r.alias}.\`${f}\` AS \`${f}\``),
+        ),
+      ].join(', ')
+      const from = [
+        `FROM ${getDef.table}${getDef.alias ? ` AS ${getDef.alias}` : ''}`,
+        ...(getDef.joins ?? []),
+      ].join(' ')
       const rows = await query(
-        `SELECT ${select} FROM ${getDef.table} WHERE id = ${lit(Number(id))} LIMIT 1 ${SETTINGS}`,
+        `SELECT ${select} ${from} WHERE ${own}id = ${lit(Number(id))} LIMIT 1 ${SETTINGS}`,
       )
       if (rows.length === 0) return await send(404, { detail: 'Not Found' })
       return await send(200, normalize(rows[0]))

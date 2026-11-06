@@ -70,7 +70,7 @@ while [ "$(date -u -d "$day" +%s)" -le "$end" ]; do
     echo "$day: $have snapshots loaded, fetching"
     # shellcheck disable=SC2086
     CH_DB="$CH_DB" CH_CLIENT="$CH" "$here/backfill.sh" $(date -u -d "$day" +'%Y %m %d')
-    [ "$ENRICH" = 1 ] && ch --multiquery < "$here/enrich-once.sql"
+    [ "$ENRICH" = 1 ] && ch --multiquery --param_day="$day" < "$here/enrich-once.sql"
   fi
 
   day=$(date -u -d "$day + 1 day" +%F)

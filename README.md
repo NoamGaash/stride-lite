@@ -109,21 +109,22 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
   enrichment together cost **14.7 s per hour of feed** — 9.8 s to pull the snapshots and 4.9 s
   to derive the typed rows — so a week of missed data takes about 41 minutes on six throttled
   cores. What is still unmeasured is RSS and CPU held over a full day of continuous running.
-- **Ride durations are not computed.** 0 of 220,518 rides since 2026-11-03 carry
-  `duration_minutes`, where production returns a number. The differential suite passed because
-  its cases sit inside the dump's window, where the value came from the dump. It is a one-pass
-  aggregation over each ride's own locations, measured at 0.087 s for a whole day, and it is a
-  field derived from ministry data, so it falls under byte-for-byte. Upstream
-  (`open-bus-stride-etl/siri/add_ride_durations.py`) is one `UPDATE` with window functions and
-  no heuristics, gated on three clock rules: a duration is written only once the ride's last
-  location is 6 hours old, a ride still without locations after 2 days is stamped `0` rather
-  than left null, and `updated_duration_minutes` records when the task ran — which is ETL
-  bookkeeping, and therefore ours.
+- **Ride durations are computed for the days this build has walked, not yet for all of
+  them.** The pass is in place — `siri_ride_duration`, filled by a parameterised view that
+  the hourly chain and the backfill both call — and the dump's own 56,363,296 measurements are
+  seeded into the same table, so there is one place to read from. What is left is running it
+  over the history day by day, at roughly 7 s a day over a 36-hour window of locations.
+  Verified against 2024-09-10, the last period production measured: the duration matches on
+  108,230 of 108,237 rides. The two location ids do not and cannot — production picks among
+  readings sharing one `recorded_at_time` in scan order, and no tie-break reproduces its
+  choice better than a coin flip (48% and 51%). `updated_duration_minutes` and
+  `updated_first_last_vehicle_locations` stay NULL: they record when an Airflow task ran, and
+  there is no task.
 - **Siri rides are not matched to GTFS rides.** `enrich_ride` writes NULL into all four
   `*_gtfs_ride_id` columns, so `/gtfs_rides_agg/group_by` returns `total_actual_rides = 0` for
   every day this build ingested, where production now returns a number. It is one gate behind
   ride durations — upstream's `siri/update_rides_gtfs.py` runs four `UPDATE`s, each gated on
-  `updated_duration_minutes is not null` — so the durations above have to land first. The
+  `updated_duration_minutes is not null` — and that gate is now open. The
   matching itself is three joins with a tolerance window, not a heuristic. See finding 13.
 - **The differential suite only compares a window that ended five months ago.** Every case
   sits inside 2025-01-01 to 2026-05-29, and neither bound is a choice about what to serve:
