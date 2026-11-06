@@ -5,13 +5,13 @@
       "Sid": "TerraformState",
       "Effect": "Allow",
       "Action": ["s3:ListBucket", "s3:GetBucketVersioning", "s3:GetBucketLocation"],
-      "Resource": "arn:aws:s3:::REPLACE-WITH-STATE-BUCKET"
+      "Resource": "arn:aws:s3:::stride-lite-tfstate-*"
     },
     {
       "Sid": "TerraformStateObjects",
       "Effect": "Allow",
       "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-      "Resource": "arn:aws:s3:::REPLACE-WITH-STATE-BUCKET/stride-lite/*"
+      "Resource": "arn:aws:s3:::stride-lite-tfstate-*/stride-lite/*"
     },
     {
       "Sid": "ReadWhatTerraformPlansAgainst",
@@ -63,7 +63,7 @@
       "Resource": "*",
       "Condition": {
         "StringEquals": {
-          "aws:RequestedRegion": "REPLACE-WITH-REGION"
+          "aws:RequestedRegion": "us-east-1"
         }
       }
     },

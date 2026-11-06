@@ -335,18 +335,30 @@ terraform apply -var budget_email=you@example.org
 ארבעה דברים חייבים להתקיים לפני ההרצה הראשונה, ואף אחד מהם אינו בריפו הזה, כי שלושה מהם
 תלויי חשבון ואחד הוא כתובת:
 
-| | מה | למה לא כאן |
-| --- | --- | --- |
-| דלי S3 עם versioning | ה-state של Terraform | עם state מקומי כל ריצת CI מתחילה מאפס ומנסה ליצור את מה שקיים |
-| משתמש IAM עם `infra/deployer-policy.json` | ההרשאות שה-CI משתמש בהן | להחליף בו קודם את `REPLACE-WITH-STATE-BUCKET` ו-`REPLACE-WITH-REGION` |
-| Secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | | |
-| Variables: `AWS_REGION`, `TF_STATE_BUCKET` | | |
+| | מה |
+| --- | --- |
+| דלי S3 בשם `stride-lite-tfstate-<account-id>` | ה-state של Terraform. עם state מקומי כל ריצת CI מתחילה מאפס ומנסה ליצור את מה שקיים |
+| משתמש IAM שנושא את `infra/deployer-policy.json` | ההרשאות שה-CI משתמש בהן. אין בו מה למלא — שם הדלי נתפס על ידי המוסכמה שלמעלה והאזור הוא זה שב-`infra/main.tf` כברירת מחדל |
+| Secrets: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | מאותו משתמש |
+| Variable: `TF_STATE_BUCKET` | השם המלא של הדלי. `AWS_REGION` אופציונלי — בלעדיו ה-workflow משתמש ב-`us-east-1` |
+
+הדלי נקרא על שם החשבון ולא בחופשיות, כי שמות דליים ב-S3 ייחודיים גלובלית: שם קבוע היה כבר
+תפוס, ושם חופשי היה ערך שה-policy לא יכול לדעת. לכן ה-policy מוגבל ל-`stride-lite-tfstate-*`,
+וזה גוזר את השם במקום לבקש ממך להמציא אותו:
 
 ```bash
-aws s3 mb s3://your-bucket --region eu-west-1
-aws s3api put-bucket-versioning --bucket your-bucket \
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+BUCKET="stride-lite-tfstate-$ACCOUNT"
+
+aws s3 mb "s3://$BUCKET" --region us-east-1
+aws s3api put-bucket-versioning --bucket "$BUCKET" \
   --versioning-configuration Status=Enabled
+echo "$BUCKET"   # זה ה-variable בשם TF_STATE_BUCKET
 ```
+
+**האזור מופיע בשני מקומות שחייבים להסכים.** ה-`aws:RequestedRegion` ב-policy הוא `us-east-1`,
+בהתאמה לברירת המחדל של `var.region`. הרצה באזור אחר מחייבת לשנות את שניהם, אחרת כל קריאת EC2
+נדחית — וזה נכשל בצורה מבלבלת, כי ה-plan נראה תקין ורק ה-apply נשבר.
 
 ה-workflow מצביע על GitHub environment בשם `aws`. הגדרת reviewer נדרש עליו היא מה שהופך
 "כל push נפרס" ל-"כל push מבקש אישור", וזה checkbox אחד.

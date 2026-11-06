@@ -31,6 +31,12 @@ jobs:
     runs-on: ubuntu-latest
     # Set this environment up with a required reviewer to gate what reaches AWS.
     environment: aws
+    env:
+      # One source for the region, with the same default main.tf carries, so
+      # leaving the variable unset gets the documented region rather than an
+      # empty -var that fails after the credentials step has already run.
+      # It has to agree with aws:RequestedRegion in infra/deployer-policy.json.
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -38,7 +44,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ vars.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -49,13 +55,13 @@ jobs:
         run: |
           terraform init -input=false \
             -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
-            -backend-config="region=${{ vars.AWS_REGION }}"
+            -backend-config="region=$AWS_REGION"
 
       - name: plan
         working-directory: infra
         run: |
           terraform plan -input=false -out=tfplan \
-            -var "region=${{ vars.AWS_REGION }}"
+            -var "region=$AWS_REGION"
 
       # The point of this project is that its numbers can be checked, so the
       # plan goes where anyone can read it rather than only into the log of a job

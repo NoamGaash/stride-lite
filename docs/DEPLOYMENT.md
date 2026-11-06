@@ -355,18 +355,32 @@ already there — there is no key pair and no open port 22.
 Four things have to exist before the first run, and none of them are in this repository
 because three are account-specific and one is an address:
 
-| | What | Why not here |
-| --- | --- | --- |
-| An S3 bucket, versioning on | Terraform state | With local state every CI run starts from nothing and tries to create what exists |
-| IAM user + `infra/deployer-policy.json` | the credentials CI uses | Replace `REPLACE-WITH-STATE-BUCKET` and `REPLACE-WITH-REGION` in it first |
-| Secrets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | | |
-| Variables `AWS_REGION`, `TF_STATE_BUCKET` | | |
+| | What |
+| --- | --- |
+| An S3 bucket named `stride-lite-tfstate-<account-id>` | Terraform state. With local state every CI run starts from nothing and tries to create what exists |
+| An IAM user carrying `infra/deployer-policy.json` | The credentials CI uses. Nothing in it to fill in — the bucket name is matched by the convention above and the region is the one `infra/main.tf` defaults to |
+| Secrets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | From that user |
+| Variable `TF_STATE_BUCKET` | The bucket's full name. `AWS_REGION` is optional — unset, the workflow uses `us-east-1` |
+
+The bucket is named after the account rather than freely, because S3 bucket names are globally
+unique: a fixed name would already be taken, and a free one would be a value the policy cannot
+know. So the policy scopes to `stride-lite-tfstate-*`, and this derives the name instead of
+asking you to invent one:
 
 ```bash
-aws s3 mb s3://your-bucket --region eu-west-1
-aws s3api put-bucket-versioning --bucket your-bucket \
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+BUCKET="stride-lite-tfstate-$ACCOUNT"
+
+aws s3 mb "s3://$BUCKET" --region us-east-1
+aws s3api put-bucket-versioning --bucket "$BUCKET" \
   --versioning-configuration Status=Enabled
+echo "$BUCKET"   # this is the TF_STATE_BUCKET variable
 ```
+
+**The region appears in two places that have to agree.** `aws:RequestedRegion` in the policy is
+`us-east-1`, matching `var.region`'s default. Running in another region means changing both, or
+every EC2 call is denied — which fails confusingly, because the plan reads fine and only the
+apply breaks.
 
 The workflow names a GitHub environment, `aws`. Putting a required reviewer on it is what
 turns "every push deploys" into "every push asks first", and it is one checkbox.
