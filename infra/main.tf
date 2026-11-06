@@ -19,28 +19,61 @@ terraform {
   }
 }
 
-# eu-west-1 because the raw SIRI and GTFS archives already live in
-# s3://openbus-stride-public there. Same-region S3 reads are free, which is
-# what keeps ingest off the egress bill entirely.
 provider "aws" {
   region = var.region
 }
 
+# us-east-1 because it is the cheapest, which is the stated priority, and because
+# the reason to prefer eu-west-1 turned out to be much weaker than it sounded.
+#
+# The archives live in s3://openbus-stride-public in eu-west-1, so eu-west-1
+# reads them for free. Measured, that archive is 13.2 MiB per hour of SIRI —
+# 9.3 GiB a month, about 14 GB with GTFS. Even at the internet rate that is under
+# $1.30 a month, against $10.06 a month more for the same instance and disk in
+# eu-west-1. The courtesy argument is the real one and it is small: S3 transfer
+# out is billed to the bucket's owner, so reading across regions costs Hasadna
+# roughly $0.30 a month that same-region reads cost them nothing.
+#
+# What it costs us is latency on a CloudFront cache miss, since the origin is
+# then in Virginia rather than Ireland. CloudFront serves from an edge near the
+# viewer and the frontend's query strings repeat under a 300 s TTL, so that is a
+# minority of requests — but it is not measured from Israel, and it is the reason
+# this is a variable.
 variable "region" {
   type    = string
-  default = "eu-west-1"
+  default = "us-east-1"
 }
 
+# t4g.large rather than m7g.large: the same 2 vCPU and 8 GiB for $49.06 a month
+# instead of $59.57. It is burstable, and the measurements say that is free here —
+# ingest and enrichment together cost 14.7 s per hour of feed, which even on two
+# vCPUs is a duty cycle of a couple of percent against a 30% baseline. The spikes
+# are the 6-hourly aggregate rebuild at 92 s and the daily GTFS load, and CPU
+# credits are for exactly that.
+#
+# 8 GiB is a floor and not a preference, which is why this does not go smaller
+# even though $24 a month is on the table. Typical queries peak under 25 MB, but
+# an unfiltered /siri_rides/list joins three large tables and was measured
+# failing at a 4 GiB ceiling with MEMORY_LIMIT_EXCEEDED — production answers that
+# call, so a 4 GiB box would turn a slower endpoint into a 500 and break the one
+# acceptance criterion this project has.
 variable "instance_type" {
-  description = "Measured peak query memory was under 25 MB, so 8 GB is not a squeeze."
-  type        = string
-  default     = "m7g.large"
+  type    = string
+  default = "t4g.large"
 }
 
+# 350 and not 400, and not 300. Measured: the served database is 243.65 GiB now,
+# and the backfill still running will add about 34 GiB (152 days at 12.15M rows
+# and 18.37 bytes a row), so roughly 278 GiB in use. 300 GB is 279.4 GiB usable,
+# which is full on day one and leaves nothing for a merge to work in. 350 GB
+# leaves about 48 GiB, which is sixteen months at the measured +36 GiB a year,
+# and costs $28 a month against $32.
+#
+# gp3 grows online without downtime, so sizing for a year and growing later is
+# strictly cheaper than sizing for three.
 variable "data_volume_gb" {
-  description = "233.02 GiB measured, base plus four projections, and room to grow at +36 GiB a year."
-  type        = number
-  default     = 400
+  type    = number
+  default = 350
 }
 
 variable "branch" {
@@ -58,6 +91,16 @@ variable "budget_usd" {
 variable "budget_email" {
   description = "Where the budget alert goes. Not defaulted: an address does not belong in a public repo."
   type        = string
+
+  # The CI logs of a public repository are public. Measured: without this, plan
+  # prints `subscriber_email_addresses = ["someone@example.org"]` in full, and
+  # with it, `(sensitive value)`. GitHub also masks registered secrets, but that
+  # is pattern matching on one more thing going right, and this is the mechanism
+  # that is supposed to carry it.
+  #
+  # It does not help the state file, which stores real values whatever this says.
+  # That is why the state bucket is private and the plan is what gets published.
+  sensitive = true
 }
 
 data "aws_ami" "al2023_arm" {

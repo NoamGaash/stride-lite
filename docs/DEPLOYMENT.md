@@ -8,7 +8,7 @@ Five questions, answered with what was measured. Anything not measured is labell
 
 ## 1. What it costs
 
-**One VM, one disk, a CDN in front: $3.24 a day, $98 a month in eu-west-1.** Under the $150
+**One VM, one disk, a CDN in front: $2.72 a day, $83 a month in us-east-1.** Under the $150
 target, and under it on on-demand rates with nothing committed.
 
 Every rate below comes from AWS's own published price list, effective **2026-11-01**, and is
@@ -26,22 +26,22 @@ script and not a paragraph.
 
 | Service | What | Per day | Per month |
 | --- | --- | --- | --- |
-| EC2 | `m7g.large`, 2 vCPU, 8 GB Graviton, 24 h | **$2.18** | $66.43 |
-| EBS | 300 GB `gp3`, the database | $0.87 | $26.40 |
-| EBS | 20 GB `gp3`, root | $0.06 | $1.76 |
+| EC2 | `t4g.large`, 2 vCPU, 8 GB Graviton, 24 h | **$1.61** | $49.06 |
+| EBS | 350 GB `gp3`, the database | $0.92 | $28.00 |
+| EBS | 20 GB `gp3`, root | $0.05 | $1.60 |
 | VPC | one public IPv4 address | $0.12 | $3.65 |
 | S3 | ingest requests, ~1,440 LIST + ~1,430 GET a day | $0.01 | $0.24 |
 | CloudFront | inside the always-free 1 TB and 10 M requests | **$0** | $0 |
-| | | **$3.24** | **$98.48** |
+| | | **$2.72** | **$82.55** |
 
-A one-year no-upfront reservation on the instance takes it to **$2.50 a day, $76 a month**.
+A one-year no-upfront reservation on the instance takes it to **$2.11 a day, $64 a month**.
 
 ### Where the money goes
 
 | | Share |
 | --- | --- |
-| Compute | **67%** |
-| Disk | 29% |
+| Compute | **59%** |
+| Disk | 36% |
 | IPv4 address | 4% |
 | Everything else — S3, CDN, egress | **under 0.3%** |
 
@@ -49,8 +49,10 @@ Two consequences, and both run against instinct.
 
 **The data pipeline is free.** Ingest, enrichment, scheduling and the CDN together are a
 third of one percent of the bill. There is nothing to optimise there, and no case for choosing
-a cheaper engine or a thriftier query. Reads of the archive are same-region and therefore
-free, which is the whole reason for picking eu-west-1.
+a cheaper engine or a thriftier query. That also means same-region reads of the archive, which
+used to be the reason for picking eu-west-1, are worth almost nothing: measured, the archive is
+13.2 MiB per hour of SIRI, about 14 GB a month with GTFS, which is under $1.30 even at the
+internet rate against $10.06 a month more for the same hardware in Ireland.
 
 **The only lever that moves the number is whether the machine is on.** Not its size, not its
 software. See below.
@@ -309,8 +311,8 @@ that never needs rescheduling. `infra/main.tf` provisions:
 
 | Terraform resource | What it is | Why |
 | --- | --- | --- |
-| `aws_instance.app` | one `m7g.large`, 20 GB root | runs ClickHouse **and** the API |
-| `aws_ebs_volume.data` + attachment | 400 GB `gp3` | the database; separate so the instance can be replaced under it |
+| `aws_instance.app` | one `t4g.large`, 20 GB root | runs ClickHouse **and** the API |
+| `aws_ebs_volume.data` + attachment | 350 GB `gp3` | the database; separate so the instance can be replaced under it |
 | `aws_cloudfront_distribution.api` | CDN, 300 s default TTL | caches the repeated query strings the frontend issues, which bounds egress |
 | `aws_security_group.api` | port 80 in, nothing else | there is no key pair, so there is nothing for port 22 to admit |
 | `aws_iam_role.instance` + SSM policy | instance profile | shell access via SSM, so no key to manage |
@@ -327,9 +329,13 @@ The bootstrap is idempotent except for creating the filesystem, which is guarded
 the data volume outlives the instance, and reformatting it is the one destructive step in this
 repository.
 
-**Region: eu-west-1**, not by preference — the SIRI archive is already in that bucket, so
-ingest reads are same-region and therefore free. Running elsewhere adds inter-region transfer
-to every hour of ingest, forever.
+**Region: us-east-1**, because it is the cheapest and that is the stated priority. The old
+reason for eu-west-1 — the SIRI archive is in that bucket, so reads are same-region and free —
+turned out to be worth under $1.30 a month against $10.06 of instance and disk. S3 transfer out
+is billed to the bucket's owner, so the part that is not ours to save is about $0.30 a month of
+Hasadna's. What it costs us is latency on a CloudFront cache miss, with the origin in Virginia
+rather than Ireland; that is a minority of requests under a 300 s TTL on repeating query
+strings, and it is not measured from Israel. `-var region=eu-west-1` puts it back.
 
 ### Deploying from CI, and what has to exist first
 
@@ -404,6 +410,48 @@ Two measurements that made `CREATE OR REPLACE` safe to use here rather than assu
 Tables cannot work that way, because they hold the data. `db/migrations/README.md` has the
 three rules; the one that matters is that ClickHouse DDL has no transaction and no rollback, so
 each statement is written to be safe to re-run after a failure half way.
+
+### What can be public, and what cannot
+
+The project is open and so is this repository, and most of what an operator would want to see
+can be public. One thing cannot, and it is the one that is tempting.
+
+**Already public, because the repository is:** every measurement and finding in `docs/`, the
+cost model (it is derived from AWS's published price list, not from a bill), `infra/` including
+`bootstrap.sh`, and the Actions logs of every run. The API itself is meant to be public — it
+serves ministry data that is already public — and so is the data.
+
+**Safe to publish, and worth it:**
+
+| | Why it is safe |
+| --- | --- |
+| `terraform plan` output, as a job summary or a PR comment | It is a diff of resource attributes, and the only personal value in this config is `budget_email`, now `sensitive` |
+| Ingest freshness from `system.view_refreshes` and the newest snapshot id | Operational state with nothing secret in it, and the thing a reader actually wants: is the data current |
+| `infra/rates.json` and `scripts/measure-cost.py` | Public rates and a script. An estimate nobody can re-derive is one nobody should act on |
+
+**Must stay private, and the Terraform state is the one to be firm about.** It is tempting
+because it looks like configuration, and it is not: it is a record of real resource attributes,
+and it stores them in plaintext whatever the configuration says. Measured on a throwaway
+config — a variable marked `sensitive = true`, whose value `terraform show` prints as
+`(sensitive value)`, appears verbatim in `terraform.tfstate`. So `sensitive` protects the logs
+and not the file. Today the only thing it exposes here is an email address and the account id;
+the rule matters because the day anyone adds a resource that generates a credential, that
+credential is in the state file, and a public bucket makes that an instant disclosure rather
+than a mistake someone can still fix.
+
+Two further reasons, neither about secrets:
+
+- **A public-read bucket is a cost amplifier.** S3 GET requests and transfer out are billed to
+  the bucket's owner, so anyone who wants to can loop on the object and put it on your bill.
+  For a project whose whole case is a $150 ceiling, that is not a theoretical risk.
+- **A public-write bucket would be worse than a leak.** Anyone could rewrite the state, and
+  the next `terraform apply` would then destroy or recreate real infrastructure to match it.
+
+AWS blocks public access on new buckets by default. Leave that on.
+
+**Also private, and for a different reason:** the actual bill, and Kamatera's invoice. Those
+are the organisation's spend, not ours to publish. Estimates derived from published rates are
+a different thing and belong in the open, which is why this document is full of them.
 
 **What is deliberately not here:** no RDS, no managed ClickHouse, no Kubernetes, no message
 queue, no Redis, no Airflow. The scheduler is `REFRESH EVERY` inside the database and the

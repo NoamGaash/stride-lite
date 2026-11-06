@@ -3,7 +3,8 @@ price-list CSVs. Called by fetch-rates.sh; writes rates.json on stdout."""
 import csv, json, sys, os
 
 work, region = sys.argv[1], sys.argv[2]
-INSTANCES = ['m7g.large', 'm7g.xlarge', 'm7g.2xlarge', 'c7g.4xlarge', 'c7g.8xlarge']
+INSTANCES = ['t4g.small', 't4g.medium', 't4g.large', 'm7g.medium', 'm7g.large',
+             'm7g.xlarge', 'm7g.2xlarge', 'r7g.medium', 'c7g.4xlarge', 'c7g.8xlarge']
 
 
 def rows(name):

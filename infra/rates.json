@@ -30,27 +30,37 @@
     "United States": 1e-06
   },
   "ebs_gp3": {
-    "gb_month": 0.088,
-    "iops_month": 0.0055,
+    "gb_month": 0.08,
+    "iops_month": 0.005,
     "snapshot_gb_month": 0.05,
-    "throughput_gibps_month": 45.056
+    "throughput_gibps_month": 40.96
   },
   "ec2_instance_hour": {
-    "c7g.4xlarge": 0.6202,
-    "c7g.8xlarge": 1.2403,
-    "m7g.2xlarge": 0.3638,
-    "m7g.large": 0.091,
-    "m7g.xlarge": 0.1819
+    "c7g.4xlarge": 0.58,
+    "c7g.8xlarge": 1.16,
+    "m7g.2xlarge": 0.3264,
+    "m7g.large": 0.0816,
+    "m7g.medium": 0.0408,
+    "m7g.xlarge": 0.1632,
+    "r7g.medium": 0.0536,
+    "t4g.large": 0.0672,
+    "t4g.medium": 0.0336,
+    "t4g.small": 0.0168
   },
   "ec2_reserved_1yr_no_upfront_hour": {
-    "c7g.4xlarge": 0.4105,
-    "c7g.8xlarge": 0.8211,
-    "m7g.2xlarge": 0.2407,
-    "m7g.large": 0.0602,
-    "m7g.xlarge": 0.1203
+    "c7g.4xlarge": 0.3822,
+    "c7g.8xlarge": 0.7644,
+    "m7g.2xlarge": 0.2159,
+    "m7g.large": 0.054,
+    "m7g.medium": 0.027,
+    "m7g.xlarge": 0.108,
+    "r7g.medium": 0.0354,
+    "t4g.large": 0.0421,
+    "t4g.medium": 0.0211,
+    "t4g.small": 0.0105
   },
   "public_ipv4_hour": 0.005,
-  "region": "eu-west-1",
+  "region": "us-east-1",
   "s3": {
     "get_request": 4e-07,
     "put_request": 5e-06,

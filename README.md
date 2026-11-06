@@ -70,7 +70,7 @@ None of the following was requested. Each is a judgement call, and each could be
 | **The stale dump's window is the test boundary** | Every differential case must sit inside it or fail for a reason that is not a bug | Fresh data — which continuous ingest now provides, so the newer cases compare against today |
 | **Sequential surrogate ids**, taken from the dump and continued with `max(id) + row_number()` | It is what the dump holds, so historical responses compare byte for byte | Measured 2026-11-05: identity derived as a hash of the natural key answers the same query ~100x faster and would delete the 52% of the database that exists only to hold these keys. The id constraint permits a wider type, so nothing blocks it but the work — see [db-benchmark](https://github.com/NoamGaash/open-bus-map-search/tree/main/db-benchmark) |
 | **Precomputation only where a query cannot do the work** | `gtfs_rides_agg_by_hour` as a plain view exceeds a 4 GiB ceiling, and stored it costs 181 MiB — 0.07% of the database. The identity tables cost 52% and make queries slower | — |
-| **`m7g.large` + 300 GB gp3** for the estimate | Peak measured query memory was ≤25 MB, so 8 GB is not optimistic; the disk, not the instance, is what the bill turns on | A 24-hour steady-state measurement, which has not been run |
+| **`t4g.large` + 350 GB gp3 in us-east-1** for the estimate | Cheapest that still holds 8 GiB, which is a floor and not a preference: an unfiltered `/siri_rides/list` was measured failing at a 4 GiB ceiling, and production answers that call. Burstable is free here at a duty cycle of a couple of percent | A 24-hour steady-state measurement, which has not been run |
 
 ### What the agent actually did
 
@@ -134,7 +134,7 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
   was found by hand. A second case set on a freshly ingested day is what closes that, and it
   is worth writing once durations and matching land, since until then most of its cases would
   fail for reasons already known.
-- **Nothing is deployed.** Priced at $3.24/day and `infra/` provisions a node that boots
+- **Nothing is deployed.** Priced at $2.72/day and `infra/` provisions a node that boots
   itself, but nothing has been applied.
 
 ## Quickstart
@@ -165,7 +165,7 @@ loaded and counted, not extrapolated.
 | `siri_vehicle_location` (6.5 billion rows) | **1.34 TB** | **111.52 GiB** |
 | The entire database | ~692 GiB of data + ~760 GB of indexes | **163.98 GiB**, or 233.02 GiB with every projection |
 | Growth per year | +307 GB | **+36 GB** |
-| Estimated AWS bill | — | **$3.24/day, $98.48/month** |
+| Estimated AWS bill | — | **$2.72/day, $82.55/month** |
 
 Three findings behind them:
 
