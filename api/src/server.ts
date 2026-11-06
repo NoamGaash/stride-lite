@@ -85,14 +85,42 @@ const MIN_GZIP_BYTES = 1024
  * by a factor of ten. Compressing at the origin fixes it whatever the CDN does,
  * and CloudFront passes an already-encoded body straight through.
  */
+/**
+ * Upstream mounts `CORSMiddleware(allow_origins='*')`, whose defaults are
+ * narrower than they look: `GET` is the only allowed method and the allowed
+ * headers are the CORS-safelisted four. Measured against production rather than
+ * assumed, because a frontend on another origin sees nothing without them.
+ */
+const PREFLIGHT_HEADERS: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET',
+  'Access-Control-Max-Age': '600',
+  'Access-Control-Allow-Headers': 'Accept, Accept-Language, Content-Language, Content-Type',
+}
+
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
   const wantsGzip = /\bgzip\b/.test(req.headers['accept-encoding'] ?? '')
+
+  if (
+    req.method === 'OPTIONS' &&
+    req.headers.origin !== undefined &&
+    req.headers['access-control-request-method'] !== undefined
+  ) {
+    res.writeHead(200, {
+      ...PREFLIGHT_HEADERS,
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Content-Length': '2',
+    })
+    return res.end('OK')
+  }
+
   const send = async (status: number, body: unknown) => {
     const text = typeof body === 'string' ? body : JSON.stringify(body)
     const raw = Buffer.from(text, 'utf-8')
     const headers: Record<string, string> = {
       'Content-Type': 'application/json; charset=utf-8',
+      'Access-Control-Allow-Origin': '*',
       Vary: 'Accept-Encoding',
     }
     const payload =

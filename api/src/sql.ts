@@ -144,9 +144,9 @@ function filterSql(f: FilterDef, raw: string): string | null {
     case 'equals':
       return `${f.column} = ${f.text ? lit(raw) : num(raw)}`
     case 'datetime_from':
-      return `${f.column} >= ${lit(parseInstant(raw))}`
+      return `${f.column} >= ${lit(parseInstant(raw, 'up'))}`
     case 'datetime_to':
-      return `${f.column} <= ${lit(parseInstant(raw))}`
+      return `${f.column} <= ${lit(parseInstant(raw, 'down'))}`
     case 'date_from':
       return `${f.column} >= ${lit(parseCivilDate(raw))}`
     case 'date_to':
@@ -177,11 +177,15 @@ const INSTANT =
  * offset is required: `DateTimeWithTimeZone.process_bind_param` raises on a
  * naive value, which production returns as a 500 rather than a 422.
  *
- * Offsets are whole minutes, so a fractional second survives the conversion
- * untouched and is carried across as text rather than through a JS Date, which
- * cannot hold microseconds.
+ * Every column these filters compare against is second-granular `DateTime`, and
+ * a literal carrying a fraction is a `TYPE_MISMATCH` against one --- which the
+ * frontend walks straight into, because `Date.toISOString()` always writes
+ * `.000Z`. So a bound is rounded to the side that leaves the comparison exact
+ * over whole seconds: a lower bound up, an upper bound down. Rounding rather
+ * than casting the literal keeps it a plain `DateTime`, so the primary index
+ * still prunes on it.
  */
-function parseInstant(raw: string): string {
+function parseInstant(raw: string, round: 'up' | 'down'): string {
   const m = INSTANT.exec(raw)
   if (!m) throw new BadRequest(`unparseable date/time: ${raw}`)
   const [, y, mo, d, hh, mm, ss, frac, offset] = m
@@ -198,8 +202,10 @@ function parseInstant(raw: string): string {
     Date.UTC(Number(y), Number(mo) - 1, Number(d), Number(hh), Number(mm), Number(ss ?? 0)) -
       offsetMinutes * 60_000,
   )
-  const stamp = utc.toISOString().slice(0, 19).replace('T', ' ')
-  return frac ? `${stamp}.${frac.padEnd(6, '0')}` : stamp
+  if (round === 'up' && frac !== undefined && Number(frac) !== 0) {
+    utc.setUTCSeconds(utc.getUTCSeconds() + 1)
+  }
+  return utc.toISOString().slice(0, 19).replace('T', ' ')
 }
 
 export interface BuildResult {
@@ -327,7 +333,7 @@ export function requireBoundedArrivalWindow(params: URLSearchParams): void {
   if (!from || !to) {
     throw new BadInput('arrival_time_from and arrival_time_to are required')
   }
-  const span = Date.parse(`${parseInstant(to)}Z`) - Date.parse(`${parseInstant(from)}Z`)
+  const span = Date.parse(`${parseInstant(to, 'down')}Z`) - Date.parse(`${parseInstant(from, 'up')}Z`)
   if (Math.floor(span / 86_400_000) > 30) {
     throw new BadInput('Time range is longer than 30 days')
   }

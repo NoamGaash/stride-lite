@@ -18,6 +18,7 @@ const routes: EndpointDef = {
     { param: 'line_refs', column: 'r.line_ref', type: 'in' },
     { param: 'name', column: 'r.name', type: 'equals', text: true },
     { param: 'from', column: 'r.recorded_at_time', type: 'datetime_from' },
+    { param: 'to', column: 'r.recorded_at_time', type: 'datetime_to' },
     { param: 'lat_ge', column: 'r.lat', type: 'greater_or_equal' },
     { param: 'prefix', column: 'r.code', type: 'prefix', text: true },
     { param: 'day_from', column: 'r.date', type: 'date_from' },
@@ -170,9 +171,32 @@ describe('date-time parameters', () => {
     )
   })
 
-  it('carries a fractional second through the conversion, padded to microseconds', () => {
+  // `Date.toISOString()` always writes a fraction, so this is what every call
+  // from the frontend looks like. A literal with one is a TYPE_MISMATCH against
+  // a second-granular DateTime column, which production answers with rows.
+  it('drops a zero fraction, which is what the frontend sends', () => {
+    expect(q({ from: '2026-05-20T08:00:00.000Z' })).toContain(
+      "r.recorded_at_time >= '2026-05-20 08:00:00'",
+    )
+  })
+
+  // Exact over whole seconds: a row at 08:00:00 is not >= 08:00:00.5, and is
+  // <= 08:00:00.5.
+  it('rounds a lower bound up to the next whole second', () => {
     expect(q({ from: '2026-05-20T08:00:00.5+03:00' })).toContain(
-      "r.recorded_at_time >= '2026-05-20 05:00:00.500000'",
+      "r.recorded_at_time >= '2026-05-20 05:00:01'",
+    )
+  })
+
+  it('rounds an upper bound down', () => {
+    expect(q({ to: '2026-05-20T08:00:00.5+03:00' })).toContain(
+      "r.recorded_at_time <= '2026-05-20 05:00:00'",
+    )
+  })
+
+  it('carries a rounded-up lower bound across a minute boundary', () => {
+    expect(q({ from: '2026-05-20T08:00:59.001Z' })).toContain(
+      "r.recorded_at_time >= '2026-05-20 08:01:00'",
     )
   })
 

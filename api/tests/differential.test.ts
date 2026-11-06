@@ -118,6 +118,12 @@ const cases: Case[] = [
     path: '/siri_vehicle_locations/list',
     params: { recorded_at_time_from: `${DAY}T08:00:00+00:00`, recorded_at_time_to: `${DAY}T08:01:00+00:00`, get_count: 'true' },
   },
+  // The shape `Date.toISOString()` produces, which is every call the frontend
+  // makes and which none of the cases above were sending.
+  {
+    path: '/siri_vehicle_locations/list',
+    params: { recorded_at_time_from: `${DAY}T08:00:00.000Z`, recorded_at_time_to: `${DAY}T08:01:00.000Z`, limit: '20', order_by: 'id asc' },
+  },
   {
     path: '/siri_vehicle_locations/list',
     params: {
