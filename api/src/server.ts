@@ -7,6 +7,7 @@ import { endpoints, getEndpoints } from './registry'
 import { rawEndpoints, wrap, type RawEndpointDef } from './raw'
 
 const PORT = Number(process.env.PORT ?? 8080)
+const HOST = process.env.HOST ?? '0.0.0.0'
 
 const byPath = new Map(endpoints.map((e) => [e.path, e]))
 const getByPath = new Map(getEndpoints.map((e) => [e.path, e]))
@@ -177,7 +178,13 @@ const server = createServer(async (req, res) => {
   }
 })
 
-server.listen(PORT, '127.0.0.1', () => {
+/**
+ * Both places this runs reach it from outside its own network namespace: the
+ * deployed instance answers CloudFront on port 80 with no proxy in front, and a
+ * dev container is reached through forwarding. A loopback bind refuses both. The
+ * boundary is the security group, which opens port 80 and nothing else.
+ */
+server.listen(PORT, HOST, () => {
   const paths = endpoints.length + getEndpoints.length + rawEndpoints.length
-  console.log(`stride-lite listening on http://127.0.0.1:${PORT} (${paths} endpoints)`)
+  console.log(`stride-lite listening on http://${HOST}:${PORT} (${paths} endpoints)`)
 })
