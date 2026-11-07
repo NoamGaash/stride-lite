@@ -46,10 +46,10 @@ jobs:
         env:
           CH_CLIENT: ./clickhouse client
         run: ./scripts/apply-schema.sh
-      - name: Expect the 16 tables, the aggregation table and its refresh, and the migration record
+      - name: Expect the 16 tables, siri_ride_duration, the aggregation table and its refresh, and the migration record
         run: |
           n=$(./clickhouse client --query "SELECT count() FROM system.tables WHERE database='stride'")
-          test "$n" = 19 || { echo "got $n tables, want 19"; exit 1; }
+          test "$n" = 20 || { echo "got $n tables, want 20"; exit 1; }
 
       - name: Expect apply-schema to be idempotent
         run: ./scripts/apply-schema.sh
@@ -68,7 +68,7 @@ jobs:
       - name: Expect the whole chain to be registered and healthy
         run: |
           n=$(./clickhouse client --query "SELECT count() FROM system.view_refreshes WHERE database='stride'")
-          test "$n" = 9 || { echo "got $n refreshable views, want 9"; exit 1; }
+          test "$n" = 10 || { echo "got $n refreshable views, want 10"; exit 1; }
           bad=$(./clickhouse client --query "SELECT count() FROM system.view_refreshes WHERE database='stride' AND exception != ''")
           test "$bad" = 0 || {
             ./clickhouse client --query "SELECT view, exception FROM system.view_refreshes WHERE exception != '' FORMAT Vertical"
@@ -100,7 +100,8 @@ jobs:
           ./clickhouse client --query "SYSTEM STOP VIEW stride.siri_ingest_previous"
           ./clickhouse client --query "TRUNCATE TABLE stride.siri_vehicle_location_raw"
           ./clickhouse client --query "TRUNCATE TABLE stride.siri_vehicle_location"
-          ./clickhouse client --database stride --multiquery < ingest/enrich-once.sql
+          ./clickhouse client --database stride --multiquery \
+            --param_day="$(date -u +%F)" < ingest/enrich-once.sql
           n=$(./clickhouse client --query "SELECT count() FROM stride.siri_vehicle_location")
           test "$n" = 0 || { echo "enrichment invented $n rows from an empty feed"; exit 1; }
 
@@ -177,3 +178,6 @@ jobs:
       - run: npx vitest run tests/differential.test.ts
         env:
           DIFF_DELAY_MS: '800'
+      # Needs the same loaded database and nothing from production, so it waits
+      # on the same snapshot this job waits on.
+      - run: npx vitest run tests/durations.test.ts

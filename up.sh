@@ -74,7 +74,8 @@ if [ "$HOURS" -gt 0 ]; then
     CH_DB="$CH_DB" CH_CLIENT="$CH" ./ingest/backfill.sh $stamp
   done
   say "enriching what was backfilled"
-  $CH --database "$CH_DB" --multiquery < ingest/enrich-once.sql
+  $CH --database "$CH_DB" --multiquery --param_day="$(date -u +%F)" \
+    < ingest/enrich-once.sql
 fi
 
 say "where it stands"

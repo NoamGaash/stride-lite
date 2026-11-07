@@ -203,6 +203,27 @@ a rewrite.
 
 ## Known gaps, stated rather than buried
 
+- **Twenty-five days of our own data are duplicated, and on one of them `id` is not a key.**
+  The enrichment mints `id` as `max(id) + row_number()`, so two passes that overlap read the
+  same starting max and hand out the same numbers. The hourly refreshable view ran during a
+  backfill and corrupted 2026-06-15 and every day from 2026-07-26 to 2026-08-23 — up to 5.6M
+  duplicate rows a day, and on 2026-06-15 **704,018 ids each cover two different readings**.
+  `siri_ride` carries 67,631 duplicate ids, all in August. `ingest/backfill-range.sh` now stops
+  the chain itself and `ingest/verify.sql` gates every day, so it cannot recur — but the damage
+  is still in the database.
+- **Two days are short at the download rather than the enrichment.** 2026-08-19 holds 455 of
+  about 1,430 snapshots and 2026-08-20 holds 1,318. `/coverage` surfaced both on sight; nothing
+  before it would have shown them at all. Friday and Saturday are legitimately a half and a
+  sixth of a weekday, which is why that endpoint reports counts and never thresholds them.
+- **September and October 2026 were never loaded**, and most of November is missing.
+- **The SIRI↔GTFS link is not implemented.** Not one of the roughly 13.4M rides we ingested
+  ourselves carries `scheduled_time_gtfs_ride_id`. The dump has it for 95% of 2024-08 and 50%
+  of 2024-09 before collapsing on the same decay as the durations. Durations are now computed,
+  which opens the `updated_duration_minutes is not null` gate upstream puts in front of it, but
+  the four `UPDATE`s themselves are still not reimplemented.
+- **`siri_vehicle_location` has no `PARTITION BY`** — one partition of 120 GiB — so no day can
+  be dropped cheaply and every repair is a mutation over the whole table. The landing table is
+  partitioned by month; the fact table probably should be too.
 - **PostgreSQL wins one query.** A selective `line_ref` + bounding-box filter is 0.017 s
   against 0.063–0.090 s, because B-tree indexes on `lon`/`lat` are the right tool. Closing it
   needs skip indexes. Not done.
