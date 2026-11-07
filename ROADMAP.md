@@ -238,6 +238,25 @@ a rewrite.
   the ministry's future timestamps would mint about 140 junk partitions reaching to 2038; and
   repartitioning means rewriting 120 GiB on a machine whose I/O throttle exists because the
   first load made it unusable. Lightweight deletes do the job instead.
+- **Every enrichment pass re-reads the whole retained landing table, four times over.**
+  `siri_feed` is "everything in landing not yet enriched" with no date filter, and the six
+  `enrich_*_src` views reference it four times between them. That cost nothing while landing held
+  one hour; now that `DROP_LANDING=0` keeps whole months it holds 150,966,451 rows, and one pass
+  reads **617,028,034 rows and 12.62 GiB** — 4.1 scans. At the 80 MiB/s ceiling in
+  `ingest/local.xml` that is about 161 s of I/O before any join work, so a one-day pass measured
+  about 24 minutes. `ingest/repair-range.sh` works around it by batching, which makes a range pay
+  the scans once instead of once per day, but the underlying cost is still there and still grows
+  with every month retained — including for `enrich_vehicle_location`, which refreshes every
+  minute and needs more than a minute of I/O for a single pass. It corrupts nothing (a
+  refreshable view cannot overrun itself; measured) but it is doing far more work per tick than
+  it was designed for. The fix is to bound `siri_feed` by snapshot prefix, which would turn each
+  scan from 151M rows into about 5.8M. Not done, and not measured.
+- **The live feed is landing about two thirds of the archive.** Measured on 2026-11-07:
+  2026/11/05 holds 959 snapshots and 2026/11/06 holds 952, against the roughly 1,428 S3 has. The
+  cause is that every repair and backfill stops the live views for its duration, and the minutes
+  that pass meanwhile are lost. `ingest/catchup.sh` now resumes from the oldest incomplete day
+  within seven days instead of from the newest snapshot's day, which makes the hole reachable —
+  but nothing has yet run long enough to confirm it closes.
 - **PostgreSQL wins one query.** A selective `line_ref` + bounding-box filter is 0.017 s
   against 0.063–0.090 s, because B-tree indexes on `lon`/`lat` are the right tool. Closing it
   needs skip indexes. Not done.
