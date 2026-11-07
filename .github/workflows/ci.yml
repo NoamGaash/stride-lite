@@ -114,9 +114,11 @@ jobs:
       # that destroys rather than delays.
       - name: Expect first-load to refuse a database it has no record of loading
         run: |
+          # siri_snapshot_id is not optional here even though the column is
+          # Nullable: siri_snapshot_enriched_mv reads it as Int32.
           ./clickhouse client --query "
-            INSERT INTO stride.siri_vehicle_location (id, recorded_at_time)
-            SELECT 1, now()"
+            INSERT INTO stride.siri_vehicle_location (id, siri_snapshot_id, recorded_at_time)
+            SELECT 1, 1, now()"
           if FIRST_LOAD_STATE=$PWD/first-load.state \
              FIRST_LOAD_LOCK=$PWD/first-load.lock \
              ./scripts/first-load.sh; then
