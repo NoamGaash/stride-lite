@@ -73,8 +73,13 @@ SELECT
     (SELECT count() - uniqExact(id) FROM siri_ride
        WHERE journey_ref >= toString({day:Date}) AND journey_ref < toString({day:Date} + 1)
     ) AS duplicate_ride_ids,
+    -- The one measure here that a projection could lie about. A siri_ride_id
+    -- filter reads `by_siri_ride`, and a lightweight delete leaves that
+    -- projection serving the rows it removed — measured, 1,732,181 against the
+    -- table's 2,860. A health verdict has to come from the table.
     (SELECT count() - uniqExact((siri_ride_id, siri_stop_id, `order`))
        FROM siri_ride_stop WHERE siri_ride_id IN (SELECT id FROM mine)
+       SETTINGS optimize_use_projections = 0
     ) AS duplicate_ride_stop_keys,
     now() AS measured_at
 FROM

@@ -60,9 +60,14 @@ ch --multiquery --param_from="$from" --param_to="$to" < "$here/repair.sql"
 # straddle the range is not repairable from inside it, and the point of a floor
 # rather than a watermark is that the final report still shows it.
 ride_floor=$(ch --query "SELECT ifNull(min(id), 0) FROM repair_ride_seen")
+# optimize_use_projections = 0 for the reason repair.sql gives at length: the
+# `by_siri_ride` projection is what a siri_ride_id filter reads, and it can be
+# serving rows a delete has already removed. A floor the gate depends on must
+# come from the table.
 ride_stop_floor=$(ch --query "
   SELECT ifNull(min(id), 0) FROM siri_ride_stop
-  WHERE siri_ride_id IN (SELECT id FROM repair_ride_seen)")
+  WHERE siri_ride_id IN (SELECT id FROM repair_ride_seen)
+  SETTINGS optimize_use_projections = 0")
 echo "   auditing siri_ride from id $ride_floor, siri_ride_stop from id $ride_stop_floor"
 
 # Three phases, and the split is not cosmetic.
