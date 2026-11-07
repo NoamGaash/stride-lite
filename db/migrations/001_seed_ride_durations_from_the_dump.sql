@@ -13,9 +13,10 @@
 -- add_ride_durations.py's second pass, which writes a zero for rides whose
 -- locations it never got to — a measurement that was never measured. They
 -- become NULL here, which is what not knowing looks like. The other 782,460
--- zeros do have both ids and are kept: at 1.4% of the measured rides they match
--- the 1.9% this implementation computes for a day of its own, so they are rides
--- that reported inside one minute rather than rides that were given up on.
+-- zeros do have both ids and are kept, because they are a measurement: the feed
+-- reported the vehicle about 23 times across some 40 minutes of archive wall
+-- clock with an unchanging recorded_at_time and an unchanging position, so the
+-- span really is zero. See finding 15 in docs/FINDINGS.md.
 --
 -- Re-runnable, per the rule in db/migrations/README.md: the NOT IN makes a
 -- second pass insert nothing, which is what a retry after a partial failure

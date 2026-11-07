@@ -97,9 +97,9 @@ describe('ride durations', () => {
       expect(ride.last_vehicle_location_id).not.toBeNull()
     }
 
-    // The two need not be the same location: a ride is commonly reported twice
-    // in one instant, which is a real zero with two distinct ids. What a zero
-    // does mean is that the two readings share a time.
+    // The two need not be the same location: a stalled feed repeats a vehicle
+    // across many snapshots without advancing recorded_at_time, so a zero is
+    // commonly two distinct ids. What a zero does mean is that they share a time.
     const zero = zeros[0]
     if (zero) {
       const ends = await get<Location[]>(
