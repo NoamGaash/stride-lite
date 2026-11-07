@@ -123,7 +123,21 @@ while [ "$(date -u -d "$day" +%s)" -le "$end" ]; do
     d=$(date -u -d "$d + 1 day" +%F)
   done
 
-  ch --multiquery < "$here/enrich-once.sql"
+  # grace_hash, and a ceiling low enough to make it bucket. The default
+  # `hash` builds the join's right side whole in memory, and for a seven-day
+  # batch that is about 20 million ride stops: measured, it took the server to
+  # its 8 GiB ceiling and died in JoiningTransform on the location step — the
+  # last of the six, after the other five had already committed. grace_hash
+  # spills the right side to disk in buckets instead, which is slower per row
+  # and is what makes a batch wider than a day possible at all.
+  #
+  # max_bytes_in_join is what actually triggers the bucketing; without it
+  # grace_hash still tries one bucket first and can reach the same ceiling.
+  ch --multiquery \
+     --join_algorithm=grace_hash \
+     --grace_hash_join_initial_buckets=16 \
+     --max_bytes_in_join=2000000000 \
+     < "$here/enrich-once.sql"
 
   # The per-day tail, which does not get cheaper in a batch: a duration needs a
   # window and a health row is one day's verdict.
