@@ -9,10 +9,13 @@
 -- There is deliberately no "the chain must be off" guard here, unlike in
 -- enrich-once.sql and repair.sql. Neither statement below mints an id:
 -- siri_ride_duration is keyed on siri_ride_id and ingest_day_health on the day,
--- both of which come from the data. Two of these running at once would write
--- the same rows twice, which a ReplacingMergeTree and an idempotent insert
--- absorb — not two different rows under one id, which is the failure the guard
--- exists for.
+-- and both keys come from the data rather than from max(id) + row_number(). So
+-- the worst two concurrent runs can do is write a row twice — ingest_day_health
+-- is a ReplacingMergeTree(measured_at) and absorbs it; siri_ride_duration is a
+-- plain MergeTree and would keep both, but both would carry the same
+-- measurement for the same ride. A duplicate row is recoverable by re-running a
+-- repair. Two different rows under one id is not, and that is what the guard on
+-- the other two files exists for.
 --
 --   clickhouse client --database stride --multiquery \
 --     --param_day=2026-06-02 < ingest/enrich-day.sql
