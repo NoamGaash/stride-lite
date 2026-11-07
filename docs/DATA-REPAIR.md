@@ -29,11 +29,23 @@ distinct readings  7,294,846    <- (siri_snapshot_id, siri_ride_stop_id, recorde
 — every reading twice, a ratio of 2.08, and `duplicate_ids` reporting 0.
 
 **Mode 2's cause is one table upstream of where it shows.** It is not the fact table racing; it
-is `siri_ride_stop`. Measured, 1,287,638 of 2026-08-16's ride stops existed **twice under the
-same `(siri_ride_id, siri_stop_id, order)`**, so every landing reading joined to both copies and
-produced two locations with two ids. Repairing the fact table alone could never fix that, which
-is why `repair.sql` now deletes a ride stop whose natural key is duplicated and not only one
+is `siri_ride_stop`: a ride stop that exists twice under the same
+`(siri_ride_id, siri_stop_id, order)` makes every landing reading through it join to both copies
+and produce two locations with two ids. Repairing the fact table alone could never fix that,
+which is why `repair.sql` deletes a ride stop whose natural key is duplicated and not only one
 whose id is.
+
+Three things support that attribution, and one number that was first quoted for it does not.
+Supporting it: 2026-08-16's ratio of 2.0822 was measured directly on the fact table, which
+involves no projection; 362,314 rides were carrying ride stops with duplicate **ids** before any
+repair ran, 96,386 of them dated 2026-08-16; and the join-fan-out mechanism is reproduced in the
+section below. **Not supporting it:** the figures of 1,287,638 duplicate natural keys for
+2026-08-16 and 42,322 for 2026-08-17 were measured *after* a lightweight delete had already run,
+which means they came through a stale `by_siri_ride` projection and are inflated by an unknown
+amount — the same defect that read 1,732,181 where the base table held 2,860. They are withdrawn
+rather than restated, and the days they described have since been deleted for re-derivation, so
+there is no way to take the measurement again. The correct post-repair value for both is zero,
+which is what `verify.sql` now asserts.
 
 It is worth being precise about which pass is the second one, because the obvious suspect is
 innocent. **The refreshable chain does not race itself.** Measured, with a refreshable view whose
@@ -49,6 +61,9 @@ change to the chain.
 
 ## The inventory
 
+All of the following were measured **before** any repair ran, so no projection could have been
+stale at the time.
+
 | Table | Duplicate ids | Id band | Days affected |
 | --- | --- | --- | --- |
 | `siri_ride_stop` | **9,161,623** | 3,669,159,741 – 3,733,952,581 | rides dated 2026-07-27 – 08-22, and 11-06 – 11-07 |
@@ -60,11 +75,16 @@ And the natural keys, which nothing had checked at all:
 
 | Table | Natural key | Duplicates |
 | --- | --- | --- |
-| `siri_ride_stop` | `(siri_ride_id, siri_stop_id, order)` | **1,287,638** for 2026-08-16's rides alone; 42,322 for 2026-08-17's |
+| `siri_ride_stop` | `(siri_ride_id, siri_stop_id, order)` | present, count withdrawn — see above |
 | `siri_ride` | `(siri_route_id, journey_ref, vehicle_ref)` | 0 above id 140,000,000 |
 | `siri_snapshot` | `snapshot_id` | 0 |
 | `siri_route` | `(line_ref, operator_ref)` | 0 |
 | `siri_stop` | `code` | 0 |
+
+The `siri_ride_stop` row is the only one in either table without a number, and the reason is the
+projection defect: every reading of that count has to go through `by_siri_ride`, and a reliable
+one can only be taken on a table with no outstanding lightweight deletes. The next clean
+measurement is the post-repair zero.
 
 Two things in that table were not known before this session.
 

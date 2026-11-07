@@ -102,9 +102,11 @@ HAVING count() > 1
 
 -- Ride stops to delete, which is three groups and not one. The first version
 -- of this file had only the second, and that is why 2026-08-16 came out of a
--- repair holding every reading twice: its ids were all unique and 1,287,638 of
--- its stops still existed twice under one natural key, so each landing reading
--- joined to both copies and produced two locations. See mode 2 in verify.sql.
+-- repair holding every reading twice: its ids were all unique and its stops
+-- still existed twice under one natural key, so each landing reading joined to
+-- both copies and produced two locations. Measured on the fact table, which is
+-- the reading that needs no projection: 15,189,121 rows for 7,294,846 distinct
+-- readings. See mode 2 in verify.sql.
 --
 --   a. the natural key appears more than once. All of its rows go, and the
 --      re-derivation mints exactly one — enrich_ride_stop_src dedups on this

@@ -22,9 +22,9 @@
 -- `siri_ride` and `siri_ride_stop` are deduped by the enrichment on a known
 -- natural key, so a second row under that key is never legitimate and the
 -- threshold is zero. And it is the upstream duplicate that causes the
--- downstream one: 2026-08-16 doubled because 1,287,638 of its ride stops
--- existed twice under the same (siri_ride_id, siri_stop_id, `order`), so every
--- landing reading joined to both copies and produced two locations.
+-- downstream one: 2026-08-16 doubled because its ride stops existed twice under
+-- the same (siri_ride_id, siri_stop_id, `order`), so every landing reading
+-- joined to both copies and produced two locations.
 --
 -- In siri_vehicle_location itself zero is the wrong threshold, because
 -- duplicate readings are legitimate there — the comment over
@@ -157,9 +157,10 @@ FROM (
 ) SETTINGS optimize_use_projections = 0;
 
 -- The one that explains the doubling, and the only check here that was failing
--- silently rather than loudly: measured, 9,161,623 duplicate ids and 1,287,638
--- duplicate natural keys sat in this table for three weeks while every gate
--- was green, because the gate did not look at it.
+-- silently rather than loudly: 9,161,623 duplicate ids sat in this table for
+-- three weeks while every gate was green, because the gate did not look at it,
+-- and the duplicate natural keys underneath them were what doubled the fact
+-- table.
 SELECT
     sum(extra) AS extra_rows,
     count() AS duplicated_keys,

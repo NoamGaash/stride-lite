@@ -2,8 +2,8 @@
 -- describe the damage they existed to report.
 --
 -- `duplicate_ids` counts siri_vehicle_location only, and the worst-damaged
--- table was siri_ride_stop: 9,161,623 duplicate ids and 1,287,638 duplicate
--- natural keys, which no column here could show. Worse, duplicate ids are only
+-- table was siri_ride_stop, at 9,161,623 duplicate ids plus the duplicate
+-- natural keys underneath them, none of which any column here could show. Worse, duplicate ids are only
 -- one of the race's two failure modes — when two passes read different starting
 -- maxima, every id is unique and the same reading is simply stored twice. On
 -- 2026-08-16 that read as 15,189,121 rows, 15,189,121 distinct ids and
