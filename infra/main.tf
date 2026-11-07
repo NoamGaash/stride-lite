@@ -23,22 +23,48 @@ provider "aws" {
   region = var.region
 }
 
-# us-east-1 because it is the cheapest, which is the stated priority, and because
-# the reason to prefer eu-west-1 turned out to be much weaker than it sounded.
+# us-east-1 because it is the cheapest, which is the recorded priority
+# (README.md §"Who decided what": "Cheapest wins, some performance loss is
+# acceptable", which is the line that ruled out eu-west-1 for same-region reads).
+# What follows is that decision re-priced against the bulk load, which it did
+# not cover, and it survives.
 #
-# The archives live in s3://openbus-stride-public in eu-west-1, so eu-west-1
-# reads them for free. Measured, that archive is 13.2 MiB per hour of SIRI —
-# 9.3 GiB a month, about 14 GB with GTFS. Even at the internet rate that is under
-# $1.30 a month, against $10.06 a month more for the same instance and disk in
-# eu-west-1. The courtesy argument is the real one and it is small: S3 transfer
-# out is billed to the bucket's owner, so reading across regions costs Hasadna
-# roughly $0.30 a month that same-region reads cost them nothing.
+# The archives live in s3://openbus-stride-public in eu-west-1, and S3 transfer
+# out is billed to the bucket's owner — Hasadna, a non-profit — so the region
+# this runs in decides what somebody else pays. Rates from AWS's own price list
+# (AWSDataTransfer offer file, fetched 2026-11-07): eu-west-1 to another AWS
+# region is $0.02/GB, to the internet $0.09/GB, and the AmazonS3 eu-west-1 offer
+# file carries no same-region transfer line at all, so a reader in eu-west-1
+# costs the owner nothing but requests ($0.0004 per 1,000 GETs).
 #
-# What it costs us is latency on a CloudFront cache miss, since the origin is
-# then in Virginia rather than Ireland. CloudFront serves from an edge near the
-# viewer and the frontend's query strings repeat under a 300 s TTL, so that is a
-# minority of requests — but it is not measured from Israel, and it is the reason
-# this is a variable.
+# Measured by unsigned LIST on 2026-11-07, so no object bytes were moved to
+# measure it: the whole SIRI archive is 288,970,717,345 bytes (269.1 GiB) in
+# 2,794,246 objects, 2021/04 to 2026/11, and October 2026 alone is 5.37 GiB in
+# 44,293 objects — about 7.4 MiB an hour of feed, not the 13.2 MiB this comment
+# used to claim. The dump is 154,630,881,726 bytes.
+#
+# So, for the whole of it:
+#
+#   first load, dump + the 162 days after it   $3.66 of transfer and $0.09 of
+#                                              requests from us-east-1;
+#                                              $0.09 from eu-west-1
+#   first load, whole archive instead          $5.78 of transfer, $1.12 of GETs
+#   steady-state ingest                        $0.13 a month from us-east-1,
+#                                              $0.02 a month from eu-west-1
+#   same instance and disk in eu-west-1        $10.06 a month more, to us
+#
+# $120.72 a year of this project's money against $3.75 of Hasadna's, once, and
+# $1.32 a year after that. The one-off is once *ever* and not once per instance:
+# scripts/first-load.sh publishes the built database to our own bucket, and every
+# later instance restores from there without touching the public bucket at all.
+# That is what makes the cheap region defensible rather than merely cheaper.
+#
+# What us-east-1 costs us is latency on a CloudFront cache miss, since the origin
+# is then in Virginia rather than Ireland. The frontend's query strings repeat
+# under a 300 s TTL so that is a minority of requests — still not measured from
+# Israel, and still the reason this is a variable. `-var region=eu-west-1` moves
+# everything, and is the right choice for the one instance that does the public
+# rebuild if the $3.66 is worth avoiding.
 variable "region" {
   type    = string
   default = "us-east-1"
@@ -62,12 +88,23 @@ variable "instance_type" {
   default = "t4g.large"
 }
 
-# 350 and not 400, and not 300. Measured: the served database is 243.65 GiB now,
-# and the backfill still running will add about 34 GiB (152 days at 12.15M rows
-# and 18.37 bytes a row), so roughly 278 GiB in use. 300 GB is 279.4 GiB usable,
-# which is full on day one and leaves nothing for a merge to work in. 350 GB
-# leaves about 48 GiB, which is sixteen months at the measured +36 GiB a year,
-# and costs $28 a month against $32.
+# 350 and not 400, and not 300. Measured on the local database 2026-11-07:
+# 180.43 GiB of base tables and 74.14 GiB of projections, 254.57 GiB served, and
+# that is with September and October 2026 still missing — about 10 GiB of
+# vehicle locations and their projections, so call a complete history 265 GiB.
+# 300 GB is 279.4 GiB usable, which is full on arrival and leaves nothing for a
+# merge to work in; 350 GB is 326.0 GiB and leaves about 61 GiB.
+#
+# How long 61 GiB lasts is now two numbers, not one, because the landing rows
+# are kept: the typed tables grow at the measured +36 GiB a year and
+# siri_vehicle_location_raw adds 2.80 GiB a month on top (measured: 133.76M rows
+# for 2026/08), so about +70 GiB a year. That is ten months, not the sixteen
+# this comment used to claim from the typed tables alone.
+#
+# The first load needs no headroom beyond that figure, which is the one thing
+# worth knowing before raising it: scripts/load-from-dump.sh streams, so the
+# 144.01 GiB dump is never on the disk. Staging it would need 398 GiB and is not
+# a size this volume can be, which is why that script takes a URL.
 #
 # gp3 grows online without downtime, so sizing for a year and growing later is
 # strictly cheaper than sizing for three.
@@ -80,6 +117,39 @@ variable "branch" {
   description = "Branch of NoamGaash/stride-lite the instance bootstraps from."
   type        = string
   default     = "main"
+}
+
+# Our own copy of the built database, and the reason a second instance never
+# reads Hasadna's bucket in bulk. 254.57 GiB of S3 Standard is $5.86 a month,
+# which takes the bill from $82.55 to $88.41 — 7% for turning a first load of
+# days into one of hours and a one-off cost to a non-profit into nothing.
+#
+# false keeps the bucket out of the account entirely, and then every fresh
+# instance rebuilds from public data. That is the reproducible path and it still
+# works; it is just the expensive one, and the expense is not ours.
+variable "backup_bucket_enabled" {
+  description = "Keep a restorable copy of the database in S3, so a fresh instance does not rebuild from the public dump."
+  type        = bool
+  default     = true
+}
+
+# A DNS name for the API, which the frontend needs rather than wants: its
+# production CSP allows connect-src https://*.hasadna.org.il and nothing else,
+# so a d111111abcdef8.cloudfront.net origin cannot be reached from the deployed
+# site at all. Setting this to a name in that zone is what makes the frontend's
+# opt-in switchable without touching its CSP.
+#
+# Empty leaves the distribution on its *.cloudfront.net name, which is what it
+# has today and is fine for curl and for a local frontend.
+#
+# Setting it needs one thing this module cannot do: a CNAME in the hasadna.org.il
+# zone, which lives in Cloudflare under hasadna-iac. Terraform requests the
+# certificate and then waits for DNS validation, so the apply blocks until the
+# validation record exists — `terraform output acm_validation_records` prints it.
+variable "api_domain" {
+  description = "Public DNS name for the API, e.g. stride-lite.hasadna.org.il. Empty uses the CloudFront default name."
+  type        = string
+  default     = ""
 }
 
 variable "budget_usd" {
@@ -96,6 +166,16 @@ variable "budget_email" {
   type        = string
   default     = "noam.gaash@gmail.com"
 }
+
+# CloudFront only accepts a certificate from us-east-1, wherever the origin is,
+# so the certificate below is created through this provider and everything else
+# through the default one.
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
+}
+
+data "aws_caller_identity" "current" {}
 
 data "aws_ami" "al2023_arm" {
   most_recent = true
@@ -147,6 +227,121 @@ resource "aws_iam_role_policy_attachment" "ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# ---- our own copy of the database -----------------------------------------
+# Named after the account because S3 bucket names are global, the same reason
+# the Terraform state bucket is. prevent_destroy for the same reason the data
+# volume has it: this is the thing that makes a rebuild an hour instead of days,
+# and a `terraform destroy` that takes it with the instance would be the one
+# mistake here with no undo.
+resource "aws_s3_bucket" "backup" {
+  count         = var.backup_bucket_enabled ? 1 : 0
+  bucket        = "stride-lite-backup-${data.aws_caller_identity.current.account_id}"
+  force_destroy = false
+
+  lifecycle {
+    prevent_destroy = true
+  }
+
+  tags = {
+    Name    = "stride-lite-backup"
+    Project = "stride-lite"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "backup" {
+  count                   = var.backup_bucket_enabled ? 1 : 0
+  bucket                  = aws_s3_bucket.backup[0].id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "backup" {
+  count  = var.backup_bucket_enabled ? 1 : 0
+  bucket = aws_s3_bucket.backup[0].id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+# A role for ClickHouse to assume, rather than keys for it to hold. Measured on
+# ClickHouse 26.10: BACKUP/RESTORE TO S3 with only a URL is refused outright
+# ("not allowed to use the server's own credentials") unless
+# s3_allow_server_credentials_in_user_queries is turned on, while
+# extra_credentials(role_arn = …) is allowed with that setting at its default —
+# the server's instance profile signs only the STS AssumeRole call, and the
+# assumed role's own credentials sign every S3 request. So this deployment keeps
+# its no-static-credentials property and does not relax a security setting to do
+# it. scripts/backup.sh is the caller.
+resource "aws_iam_role" "backup" {
+  count = var.backup_bucket_enabled ? 1 : 0
+  name  = "stride-lite-backup"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect    = "Allow"
+      Action    = "sts:AssumeRole"
+      Principal = { AWS = aws_iam_role.instance.arn }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "backup" {
+  count = var.backup_bucket_enabled ? 1 : 0
+  name  = "stride-lite-backup"
+  role  = aws_iam_role.backup[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"]
+        Resource = "${aws_s3_bucket.backup[0].arn}/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket", "s3:GetBucketLocation"]
+        Resource = aws_s3_bucket.backup[0].arn
+      },
+    ]
+  })
+}
+
+# The instance's own permission is one action on one role, which is the whole of
+# its S3 access: the public archive it reads with NOSIGN and needs nothing for.
+resource "aws_iam_role_policy" "instance_assume_backup" {
+  count = var.backup_bucket_enabled ? 1 : 0
+  name  = "stride-lite-assume-backup"
+  role  = aws_iam_role.instance.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "sts:AssumeRole"
+        Resource = aws_iam_role.backup[0].arn
+      },
+      # Listing, and only listing. scripts/first-load.sh asks whether a backup is
+      # there before trying to restore one, because the alternative is reading a
+      # failed RESTORE's exit code and guessing whether it means "absent" or
+      # "broken" — and guessing wrong either loops or starts a two-day rebuild.
+      # On the first instance ever the bucket is empty and the answer is no.
+      {
+        Effect   = "Allow"
+        Action   = "s3:ListBucket"
+        Resource = aws_s3_bucket.backup[0].arn
+      },
+    ]
+  })
+}
+
 resource "aws_iam_instance_profile" "instance" {
   name = "stride-lite-instance"
   role = aws_iam_role.instance.name
@@ -164,7 +359,15 @@ resource "aws_instance" "app" {
     encrypted   = true
   }
 
-  user_data                   = templatefile("${path.module}/bootstrap.sh", { branch = var.branch })
+  user_data = templatefile("${path.module}/bootstrap.sh", {
+    branch = var.branch
+    region = var.region
+    # The trailing slash matters: ClickHouse treats the URL as a directory for
+    # the backup's own files, and without it the backup is one object named
+    # after the prefix.
+    backup_url      = var.backup_bucket_enabled ? "s3://${aws_s3_bucket.backup[0].id}/full/" : ""
+    backup_role_arn = var.backup_bucket_enabled ? aws_iam_role.backup[0].arn : ""
+  })
   user_data_replace_on_change = false
 
   tags = {
@@ -202,12 +405,49 @@ resource "aws_volume_attachment" "data" {
   instance_id = aws_instance.app.id
 }
 
+# ---- the API's own name ----------------------------------------------------
+# us_east_1 whatever var.region is: CloudFront reads certificates from there and
+# nowhere else.
+#
+# DNS validation and not email, because the zone is managed as code in
+# hasadna-iac and a person clicking a link is not. The record to create is in
+# the acm_validation_records output; the validation resource below then waits
+# for it, so `terraform apply` sits there until somebody adds it. That is the
+# intended shape — the alternative is an apply that succeeds and a distribution
+# that serves the wrong certificate.
+resource "aws_acm_certificate" "api" {
+  provider          = aws.us_east_1
+  count             = var.api_domain == "" ? 0 : 1
+  domain_name       = var.api_domain
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+
+  tags = {
+    Name    = "stride-lite-api"
+    Project = "stride-lite"
+  }
+}
+
+resource "aws_acm_certificate_validation" "api" {
+  provider        = aws.us_east_1
+  count           = var.api_domain == "" ? 0 : 1
+  certificate_arn = aws_acm_certificate.api[0].arn
+
+  timeouts {
+    create = "60m"
+  }
+}
+
 # Egress volume is the single unknown this design cannot measure locally, so
 # the API is fronted by CloudFront: it caches the repeated query strings the
 # frontend issues, which bounds origin traffic instead of leaving it open-ended.
 resource "aws_cloudfront_distribution" "api" {
   enabled = true
   comment = "stride-lite API"
+  aliases = var.api_domain == "" ? [] : [var.api_domain]
 
   origin {
     domain_name = aws_instance.app.public_dns
@@ -248,8 +488,24 @@ resource "aws_cloudfront_distribution" "api" {
     }
   }
 
-  viewer_certificate {
-    cloudfront_default_certificate = true
+  # Without an alias there is nothing to certify but the *.cloudfront.net name,
+  # which CloudFront's own certificate already covers.
+  dynamic "viewer_certificate" {
+    for_each = var.api_domain == "" ? [1] : []
+    content {
+      cloudfront_default_certificate = true
+    }
+  }
+
+  dynamic "viewer_certificate" {
+    for_each = var.api_domain == "" ? [] : [1]
+    content {
+      acm_certificate_arn = aws_acm_certificate_validation.api[0].certificate_arn
+      ssl_support_method  = "sni-only"
+      # 2021 and not the default: the default is TLSv1, and nothing that reads
+      # this API is older than a browser that speaks 1.2.
+      minimum_protocol_version = "TLSv1.2_2021"
+    }
   }
 }
 
@@ -279,7 +535,36 @@ resource "aws_budgets_budget" "monthly" {
 }
 
 output "api_url" {
+  value = "https://${var.api_domain == "" ? aws_cloudfront_distribution.api.domain_name : var.api_domain}"
+}
+
+# What the frontend can actually be pointed at. Until api_domain is set this is
+# a *.cloudfront.net name, and the deployed frontend's CSP allows connect-src
+# https://*.hasadna.org.il only — so the opt-in cannot be switched on with this
+# value, whatever is in the variable.
+output "api_origin_url" {
   value = "https://${aws_cloudfront_distribution.api.domain_name}"
+}
+
+# The CNAME somebody with access to the hasadna.org.il zone has to create, in
+# Cloudflare, DNS-only rather than proxied: proxying a name that CloudFront
+# already serves adds a second CDN in front of the first.
+#
+#   <name> CNAME <value>      the validation record, from ACM
+#   <api_domain> CNAME <the api_origin_url host>
+output "acm_validation_records" {
+  value = var.api_domain == "" ? [] : [
+    for o in aws_acm_certificate.api[0].domain_validation_options : {
+      name  = o.resource_record_name
+      type  = o.resource_record_type
+      value = o.resource_record_value
+    }
+  ]
+}
+
+output "backup_url" {
+  description = "Where scripts/backup.sh saves and restores the database. Empty when backup_bucket_enabled is false."
+  value       = var.backup_bucket_enabled ? "s3://${aws_s3_bucket.backup[0].id}/full/" : ""
 }
 
 output "instance_id" {

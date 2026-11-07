@@ -152,12 +152,39 @@ jobs:
             --query 'StandardErrorContent' --output text >&2
           test "$status" = Success
 
+      # api_origin_url and not api_url: with api_domain set, api_url is a name in
+      # somebody else's DNS zone and it resolves when they add the record, which
+      # is not a condition of this deploy. The distribution's own name is.
       - name: the API answers
         working-directory: infra
         run: |
-          url=$(terraform output -raw api_url)
+          url=$(terraform output -raw api_origin_url)
           for _ in $(seq 1 30); do
             curl -fsS "$url/healthz" && break
             sleep 10
           done
           curl -fsS "$url/healthz"
+
+      # A first load runs for hours and deliberately does not block a deploy, so
+      # the one thing this workflow owes the operator is to say where it got to
+      # rather than leaving them to go and look. Not a gate: a node still loading
+      # history is a working deploy, and that is the whole design.
+      - name: what the node holds
+        run: |
+          id=$(aws ssm send-command \
+            --instance-ids "${{ steps.target.outputs.instance }}" \
+            --document-name AWS-RunShellScript \
+            --comment "first-load status" \
+            --timeout-seconds 600 \
+            --parameters commands='["systemctl is-active stride-first-load || true","cat /var/lib/clickhouse/first-load.state 2>/dev/null || echo \"no first-load state yet\"","curl -fsS http://127.0.0.1/status"]' \
+            --query 'Command.CommandId' --output text)
+          for _ in $(seq 1 30); do
+            status=$(aws ssm get-command-invocation --command-id "$id" \
+              --instance-id "${{ steps.target.outputs.instance }}" \
+              --query Status --output text)
+            case "$status" in Success|Failed|Cancelled|TimedOut) break ;; esac
+            sleep 10
+          done
+          aws ssm get-command-invocation --command-id "$id" \
+            --instance-id "${{ steps.target.outputs.instance }}" \
+            --query 'StandardOutputContent' --output text | tee -a "$GITHUB_STEP_SUMMARY"

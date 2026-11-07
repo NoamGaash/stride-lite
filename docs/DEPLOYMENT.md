@@ -31,19 +31,26 @@ script and not a paragraph.
 | EBS | 20 GB `gp3`, root | $0.05 | $1.60 |
 | VPC | one public IPv4 address | $0.12 | $3.65 |
 | S3 | ingest requests, ~1,440 LIST + ~1,430 GET a day | $0.01 | $0.24 |
+| S3 | 254.57 GiB of Standard, the restorable copy of the database | $0.19 | **$5.86** |
 | CloudFront | inside the always-free 1 TB and 10 M requests | **$0** | $0 |
-| | | **$2.72** | **$82.55** |
+| | | **$2.91** | **$88.41** |
 
-A one-year no-upfront reservation on the instance takes it to **$2.11 a day, $64 a month**.
+A one-year no-upfront reservation on the instance takes it to **$2.30 a day, $70 a month**.
+
+**The backup line is new and it buys one thing: a fresh instance that fills itself in an hour
+instead of days, without reading a non-profit's bucket.** 7% of the bill. `-var
+backup_bucket_enabled=false` removes it, and then every fresh instance rebuilds from public
+data — reproducible, still correct, and the expense is no longer ours. See §"Day one".
 
 ### Where the money goes
 
 | | Share |
 | --- | --- |
-| Compute | **59%** |
-| Disk | 36% |
+| Compute | **55%** |
+| Disk | 34% |
+| The restorable copy in S3 | 7% |
 | IPv4 address | 4% |
-| Everything else — S3, CDN, egress | **under 0.3%** |
+| Everything else — ingest requests, CDN, egress | **under 0.3%** |
 
 Two consequences, and both run against instinct.
 
@@ -57,7 +64,7 @@ internet rate against $10.06 a month more for the same hardware in Ireland.
 **The only lever that moves the number is whether the machine is on.** Not its size, not its
 software. See below.
 
-### Why 300 GB
+### Why 350 GB
 
 Measured on the loaded database, with every projection built:
 
@@ -71,39 +78,94 @@ Measured on the loaded database, with every projection built:
 | **Total** | **233.02 GiB** |
 
 Projections are **30% of the footprint**, worth knowing before sizing a disk around the
-164 GiB the data alone occupies. The live database measures **241.29 GiB** now that GTFS runs
-daily rather than ageing from the dump.
+164 GiB the data alone occupies.
+
+Re-measured on the live database on **2026-11-07**: **180.43 GiB of base tables and 74.14 GiB
+of projections, 254.57 GiB served**, across 7.14 billion vehicle locations. Two things changed
+it since the dump figure above. GTFS runs daily instead of ageing from the dump, and the SIRI
+landing rows are now **kept** rather than dropped per month — `siri_vehicle_location_raw` is
+3.12 GiB today and grows 2.80 GiB a month (measured: 133.76M rows for 2026/08), which is the
+price of being able to repair a day without a second download out of Hasadna's bucket.
+
+**That 254.57 GiB is not a complete history**, and a disk sized from it would be sized from a
+gap: September and October 2026 were never loaded, and most of November is missing. About
+10 GiB of vehicle locations and their projections, so call a complete history **265 GiB**.
+
+So 350 GB — 326.0 GiB usable — leaves about **61 GiB**. At the measured +36 GiB a year of typed
+tables *plus* 33.6 GiB a year of landing rows, that is **ten months, not the sixteen** the
+typed tables alone suggested. 300 GB is 279.4 GiB and would be full on arrival with nothing for
+a merge to work in.
+
+**The first load needs no headroom beyond that figure**, which is the thing worth knowing before
+raising it: `scripts/load-from-dump.sh` streams, so the 144.01 GiB dump is never on the disk.
+Staging it would need 398 GiB, which is not a size this volume can be.
 
 **One projection can go.** `siri_ride_stop.by_gtfs_stop` exists only to make
 `/stop_arrivals/list` fast, and that endpoint cannot return a row from production for any
 input — see [FINDINGS.md](FINDINGS.md). Dropping it saves 19.33 GiB and costs nothing anyone
 can observe.
 
-EBS volumes grow online and never shrink, so there is no reason to buy headroom up front.
-300 GB fits today with room for about a year and a half at the measured +36 GiB/year.
+EBS volumes grow online and never shrink, so there is no reason to buy headroom up front:
+sizing for a year and raising it later is strictly cheaper than sizing for three.
 
 **Why one instance and not two:** measured peak query memory was **≤25 MB** and the API is a
 stateless Node process. `infra/main.tf` provisions exactly one.
 
 ### Day one
 
-Two ways to get 241 GiB onto the machine, and the cheap one is also the fast one.
+Three ways to get 255 GiB onto the machine, and the question is not only what it costs us —
+reading `s3://openbus-stride-public` is billed to **Hasadna**, so two of the three spend
+somebody else's money.
 
-| | AWS cost | Wall clock |
-| --- | --- | --- |
-| **Upload the built database** — `BACKUP … TO S3(…)` here, `RESTORE` there | **~$2** | bounded by your uplink: 35 min at 1 Gbps, 5.8 h at 100 Mbps |
-| **Rebuild from the public dump on the instance** | $7–18 | hours; 14 h measured locally on six throttled cores |
+Everything below is measured. The archive was measured by unsigned `LIST` on **2026-11-07**, so
+no object bytes were moved to measure it: **288,970,717,345 bytes (269.1 GiB) in 2,794,246
+objects**, 2021/04 to 2026/11. The dump is **154,630,881,726 bytes**, `Last-Modified`
+2026-06-14, and the data inside it ends 2026-05-29. Transfer rates are from AWS's own
+`AWSDataTransfer` offer file, fetched the same day: out of eu-west-1, **$0.02/GB to another AWS
+region, $0.09/GB to the internet**, and the `AmazonS3` eu-west-1 offer file carries no
+same-region transfer line at all — a reader in eu-west-1 costs the owner nothing but requests,
+at $0.0004 per 1,000 GETs.
 
-Transfer **into** S3 is free, so the first path pays only for the backup sitting in S3 for a
-day or two (~$0.36), the multipart PUTs (~$0.08), and an hour or two of instance time. Its
-floor is EBS write throughput: `gp3` gives 125 MB/s at baseline, so 241 GiB cannot land in
-less than **35 minutes** however fast the uplink is.
+| | To Hasadna | To us | Wall clock |
+| --- | --- | --- | --- |
+| **(c) `RESTORE` our own copy** | **$0** | $5.86/month of S3 Standard while it sits there | 35 min floor, see below |
+| **(a) Stream the public dump, then backfill the 162 days after it** | $3.66 of transfer + $0.09 of GETs from us-east-1; **$0.09 from eu-west-1** | $0 | hours to days, see below |
+| **(b) Backfill the whole archive, no dump** | $5.78 of transfer + **$1.12 of GETs** | $0 | **190 h at the measured 337 s/day** |
 
-The second path needs no upload at all — the dump is in the same bucket and the same region,
-so reading it is free — but it re-parses 13.7 billion rows and then rebuilds the four
-projections, about 25 minutes each as measured locally. The instance type is decoupled from
-the volume, so this is the one job worth renting a `c7g.8xlarge` for at $1.24/h and then
-stopping.
+**(c) wins on every axis and it is what `first-load.sh` prefers.** Transfer *into* S3 is free
+and an in-region read out of S3 to EC2 is free, so a restore costs the storage while the copy
+sits there and nothing else. Its floor is EBS write throughput: `gp3` gives 125 MB/s at
+baseline, so 255 GiB cannot land in less than **35 minutes** however fast the source is. It
+also skips the one cost the other two cannot: there is nothing to parse and no projection to
+build, because `BACKUP` carries the projection parts — verified on 26.10, a backed-up and
+restored table came back with its projection populated.
+
+The catch is that (c) is not reproducible from public data: somebody has to have built it. So
+the design is both — **(a) once, ever, and (c) from then on.** The first instance rebuilds from
+public data and then publishes a backup to our own bucket; every later instance restores from
+there and never touches the public bucket in bulk. That is what makes the $3.66 a one-off
+rather than a per-instance cost, and it is the whole reason `var.backup_bucket_enabled`
+defaults to true.
+
+**(b) is the one to avoid**, which is worth saying because it is the obvious-looking answer:
+the archive is the system of record, so why not read it? Because 2.8 million HTTP GETs at
+337 s/day is **eight days** of fetching, it costs Hasadna more than the dump does in transfer
+*and* twelve times as much in requests, and it ends up at the same rows the dump already holds.
+It is the right tool for the 162 days the dump does not cover, and the wrong one for the four
+years it does.
+
+**On (a)'s wall clock, honestly: not measured on this hardware, and the local figure does not
+transfer.** 14 h on six throttled cores is what `docs/LOCAL-DB.md` measured for the parse; a
+`t4g.large` has two vCPUs and a 30% baseline, so a job that pins them for a day will exhaust
+its CPU credits and then run at baseline. The instance type is decoupled from the volume, so
+this is the one job worth renting a `c7g.8xlarge` for — `-var instance_type=c7g.8xlarge` at
+$1.16/h, then set it back, which stops and starts the instance without touching the volume.
+
+**(a) streams and cannot stage.** 144.01 GiB of dump plus 254.57 GiB of loaded data is 398 GiB,
+and the volume is 326 GiB: staging the dump is not slower there, it is impossible. So
+`scripts/load-from-dump.sh` takes a URL and pipes it straight into 33 parallel inserts. The
+price of that is no resume — an interrupted stream starts over, and over somebody else's
+egress — which is one more reason the first instance publishes a backup the moment it succeeds.
 
 Either way **day one is not where the money is.** The recurring bill is.
 
@@ -167,10 +229,18 @@ deliberately contains:
 
 | Not here | Why |
 | --- | --- |
-| EBS snapshots or any backup | the source is in S3 and the derivation is 41 min/week |
+| EBS snapshots | a volume restored from a snapshot loads its blocks lazily from S3, so the first reads are slow exactly when they are needed, and Fast Snapshot Restore costs more than the storage it saves |
 | A second instance, failover, a load balancer | downtime costs compute to recover, not data |
 | Health alarms, paging, an on-call path | nothing to be woken up for |
 | A budget alarm | **this one is here** — see below |
+
+**One thing this table used to rule out is now here, and the reason the argument above does not
+cover it: a restorable copy of the database in S3.** The argument above is about *losing* a
+node, and it still holds — the node is derived and the archive is the system of record.
+`var.backup_bucket_enabled` is about *filling* one. Recovering a week of gap is 41 minutes of
+compute; recovering the whole history from public data is days of compute and $3.75 of
+Hasadna's money, and the copy turns that into 35 minutes and nothing. It is not insurance. It
+is the first load, and §"Day one" has the numbers.
 
 The asymmetry is the point. Downtime is recoverable with compute; **money spent is not
 recoverable at all.** So `infra/main.tf` carries exactly one guard, `aws_budgets_budget`, at
@@ -284,12 +354,23 @@ curl 'http://127.0.0.1:8080/siri_routes/list?limit=2'
 cd api && npm test       # 35 unit tests, no DB needed
 ```
 
-For the full 13.7-billion-row history instead of live data (~14 h, 164 GiB):
+For the full 13.7-billion-row history instead of live data (~14 h on six throttled cores,
+164 GiB):
 
 ```bash
 curl -O https://openbus-stride-public.s3.eu-west-1.amazonaws.com/stride_db.sql.zst
 ./scripts/load-from-dump.sh stride_db.sql.zst
 ```
+
+Keeping the file is worth the 144 GiB locally, because a reload then costs nothing and reaches
+no network. Where it is not — a cloud volume that cannot hold both — the same script takes the
+URL and streams it, staging nothing:
+
+```bash
+./scripts/load-from-dump.sh https://openbus-stride-public.s3.eu-west-1.amazonaws.com/stride_db.sql.zst
+```
+
+**Please do not run either twice.** 154.63 GB comes out of a non-profit's bucket each time.
 
 Watch the ingest:
 
@@ -305,7 +386,7 @@ Full detail, including how to keep the load from taking your machine down, is in
 
 ## 4. Exact cloud resources
 
-**A VM, not a container service.** ClickHouse here is a stateful single node with a 300 GB
+**A VM, not a container service.** ClickHouse here is a stateful single node with a 350 GB
 attached disk; ECS or Fargate would add an orchestration layer around one long-lived process
 that never needs rescheduling. `infra/main.tf` provisions:
 
@@ -316,7 +397,9 @@ that never needs rescheduling. `infra/main.tf` provisions:
 | `aws_cloudfront_distribution.api` | CDN, 300 s default TTL | caches the repeated query strings the frontend issues, which bounds egress |
 | `aws_security_group.api` | port 80 in, nothing else | there is no key pair, so there is nothing for port 22 to admit |
 | `aws_iam_role.instance` + SSM policy | instance profile | shell access via SSM, so no key to manage |
-| `infra/bootstrap.sh` as `user_data` | installs ClickHouse, Node, the schema, the ingest chains and the GTFS cron | a launched instance serves the API with no further steps |
+| `aws_s3_bucket.backup` + a role for ClickHouse to assume | `stride-lite-backup-<account-id>` | the restorable copy of the database, so a fresh instance fills itself in an hour. `prevent_destroy`, for the same reason the data volume has it |
+| `aws_acm_certificate.api`, when `api_domain` is set | a certificate in us-east-1 | CloudFront reads certificates from there and nowhere else |
+| `infra/bootstrap.sh` as `user_data` | installs ClickHouse, Node, the schema, the crons, and starts the first load | a launched instance serves the API, and fills itself, with no further steps |
 | `aws_budgets_budget.monthly` | alerts at 50/80/100% of `budget_usd` | the only unrecoverable failure here is spend |
 
 ```bash
@@ -329,13 +412,72 @@ The bootstrap is idempotent except for creating the filesystem, which is guarded
 the data volume outlives the instance, and reformatting it is the one destructive step in this
 repository.
 
-**Region: us-east-1**, because it is the cheapest and that is the stated priority. The old
-reason for eu-west-1 — the SIRI archive is in that bucket, so reads are same-region and free —
-turned out to be worth under $1.30 a month against $10.06 of instance and disk. S3 transfer out
-is billed to the bucket's owner, so the part that is not ours to save is about $0.30 a month of
-Hasadna's. What it costs us is latency on a CloudFront cache miss, with the origin in Virginia
+**Region: us-east-1**, because it is the cheapest and that is the recorded priority —
+README.md §"Who decided what" carries "Cheapest wins, some performance loss is acceptable", and
+that is the line that ruled out eu-west-1 for same-region reads. It was decided on steady state
+alone, so here it is re-priced against the bulk load, which is the thing it did not cover.
+
+The archives are in `s3://openbus-stride-public` in eu-west-1, and **S3 transfer out is billed
+to the bucket's owner**, so this choice decides what a non-profit pays. Rates from AWS's
+`AWSDataTransfer` offer file, fetched 2026-11-07: out of eu-west-1, **$0.02/GB to another AWS
+region, $0.09/GB to the internet**, and the `AmazonS3` eu-west-1 offer file has no same-region
+line at all, so a reader in eu-west-1 costs the owner nothing but requests. Measured volumes:
+the dump is 154,630,881,726 bytes, and the whole SIRI archive is 288,970,717,345 bytes
+(269.1 GiB) in 2,794,246 objects — measured by `LIST` on 2026-11-07, so no bytes were moved to
+measure it. October 2026 alone is 5.37 GiB in 44,293 objects, about **7.4 MiB an hour of feed**
+and not the 13.2 MiB this repository used to quote.
+
+| | us-east-1 | eu-west-1 |
+| --- | --- | --- |
+| First load: dump + the 162 days after it, **to Hasadna** | $3.66 transfer + $0.09 requests | **$0.09** |
+| Steady-state ingest, **to Hasadna** | $0.13/month | $0.02/month |
+| The same instance and disk, **to us** | — | **+$10.06/month** |
+
+So eu-west-1 would spend **$120.72 a year of this project's money to save $3.75 of Hasadna's,
+once, and $1.32 a year after that.** That is why us-east-1 stays, and the reason it is
+defensible rather than merely cheaper is that the $3.75 is paid **once ever and not once per
+instance**: `scripts/first-load.sh` publishes the built database to our own bucket, and every
+later instance restores from there without reading the public bucket in bulk at all.
+
+If even that one-off is worth avoiding, the lever is per-instance rather than permanent: run
+the instance that does the public rebuild with `-var region=eu-west-1`, let it publish, and the
+copy it leaves behind is what everything after it reads.
+
+What us-east-1 costs us is latency on a CloudFront cache miss, with the origin in Virginia
 rather than Ireland; that is a minority of requests under a 300 s TTL on repeating query
-strings, and it is not measured from Israel. `-var region=eu-west-1` puts it back.
+strings, and **it is still not measured from Israel.**
+
+### A name the frontend can actually reach
+
+`output "api_url"` is a `*.cloudfront.net` name until `var.api_domain` is set, and that is not
+merely untidy: the frontend's production CSP allows `connect-src https://*.hasadna.org.il` and
+nothing else, enforced identically in its `csp.ts` and `nginx-default.conf` with a test
+asserting the two match byte for byte. So the frontend's `VITE_STRIDE_LITE_API` opt-in
+(hasadna/open-bus-map-search#1929) **cannot be switched on against the default name at all**,
+whatever is put in the variable. Either this deployment gets a name in that zone, or two files
+in the frontend change; the first touches nobody else's repository.
+
+Setting `-var api_domain=stride-lite.hasadna.org.il` makes Terraform request an ACM certificate
+in **us-east-1 regardless of `var.region`** — CloudFront reads certificates from there and
+nowhere else — attach it to the distribution as an alias with `sni-only` and a
+`TLSv1.2_2021` floor, and then wait for DNS validation.
+
+**Two records are needed from whoever controls the `hasadna.org.il` zone**, which is Cloudflare
+under `hasadna-iac`:
+
+| | |
+| --- | --- |
+| the ACM validation record | `terraform output acm_validation_records` prints its name, type and value |
+| `stride-lite.hasadna.org.il` CNAME to the distribution | `terraform output api_origin_url` is the host |
+
+Both **DNS-only, not proxied**: an orange-cloud record puts Cloudflare's CDN in front of
+CloudFront, which is a second cache, a second TLS termination and a second place to debug.
+
+The apply **blocks** until the validation record exists — `aws_acm_certificate_validation` with
+a 60-minute timeout. That is the intended shape: the alternative is an apply that succeeds and
+a distribution serving a certificate for a name nobody can resolve. The health check in
+`deploy.yml` uses `api_origin_url` and not `api_url` for the same reason — whether somebody
+else has added a DNS record is not a condition of our deploy succeeding.
 
 ### Deploying from CI, and what has to exist first
 
@@ -436,24 +578,67 @@ run and the trust policy admits one repository.
 
 ### What the first deploy leaves you with
 
-A working API over a nearly empty database, and that is not a bug to chase.
-`bootstrap.sh` applies the schema and starts the refreshable views, which read the
-running hour from S3 — so SIRI data accumulates from go-live forward, and nothing
-before it exists. GTFS waits for its cron entry at 04:20 UTC, so for up to a day
-`newest_gtfs_date` in `/status` is null and every endpoint that joins GTFS answers
-empty.
+**The whole history, without anybody running a command.** That is new, and this section used to
+say the opposite — "a working API over a nearly empty database, and that is not a bug to chase".
+It was a bug, and this is what it was: `bootstrap.sh` applied the schema and started the
+refreshable views, which read the running hour from S3, so data accumulated from go-live forward
+and nothing before it existed. `ingest/catchup.sh` refuses an empty database on purpose ("a
+first load is `./up.sh`, not a catch-up"), because it walks forward from the newest snapshot
+actually loaded and there was none. Nothing loaded history. A deploy produced an API that
+answered every query with an empty list.
 
-Filling the history is a deliberate one-time run, because it costs hours and a lot
-of S3 reads:
+`infra/bootstrap.sh` now ends by starting `stride-first-load.service`, a `oneshot` unit that
+runs [`scripts/first-load.sh`](../scripts/first-load.sh) once. Five stages, each skipped when
+the state file on the data volume says it finished:
+
+| Stage | What it does |
+| --- | --- |
+| `history` | everything up to the dump's last day: `RESTORE` from our own S3 copy if there is one, otherwise stream the public dump |
+| `gtfs` | yesterday's feed, which the dump's GTFS tables stop short of |
+| `live` | `ingest/siri.sql`, `ingest/enrich.sql`, `ingest/health.sql` — the chain that keeps it current from here |
+| `backfill` | `ingest/backfill-range.sh` from the history watermark to today |
+| `publish` | `BACKUP` to our own bucket, so no later instance repeats the public rebuild |
+
+Five properties, each of which is the answer to a way this can go wrong.
+
+**It is resumable, and the state lives on the data volume.** `/var/lib/clickhouse/first-load.state`
+is one append-only line per stage, so the file reads as a log of what happened and when. The
+volume is the right lifetime: it outlives the instance exactly as the data it describes does, so
+replacing the instance under it does not restart a load that finished. `Restart=on-failure` with
+`RestartSec=600` retries, and `TimeoutStartSec=infinity` is not decoration — the default start
+timeout is 90 seconds and this job is measured in hours.
+
+**It does not run alongside the ingest.** The unit takes `/var/lock/stride-catchup`, the lock the
+hourly `catchup.sh` cron already uses with `flock -n`, so a tick during a first load does not
+run rather than queueing behind it. `scripts/deploy.sh` takes the same lock with a ten-minute
+wait and, if it cannot get it, updates the code and leaves the schema to the next deploy.
+
+**The live chain is installed after the history, not before.** The dump carries its own `id`
+values and the enrichment mints ids as `max(id) + row_number()`; both writing at once hands one
+id to two different readings, which is the failure that cost this project twenty-nine days of
+data. On a retry — where the chain is already up — the history stage stops it, waits for the
+refresh in flight, and starts it again.
+
+**It refuses to empty a database it has no record of loading.** A retry of the history stage
+truncates the data tables, because `RESTORE` will not write into a table that already holds rows
+(measured: `CANNOT_RESTORE_TABLE`) and a stream that died half way leaves part of itself behind.
+So a populated database with no state file stops the script rather than being emptied by it. CI
+asserts this one, because it is the only failure mode here that destroys rather than delays.
+
+**It asks whether a backup exists before trying to restore one.** An absent backup means rebuild
+from public data; a broken one means stop and look; and a failed `RESTORE`'s exit code does not
+tell them apart. On the first instance ever the bucket is empty, so the answer is no.
+
+Watching it:
 
 ```bash
 aws ssm send-command --instance-ids "$ID" --document-name AWS-RunShellScript \
-  --timeout-seconds 86400 --parameters commands='["cd /opt/stride-lite && CH_DB=stride CH_CLIENT=\"clickhouse client\" ./ingest/gtfs.sh && ./ingest/backfill-range.sh 2026-01-01 $(date -u +%F)"]'
+  --parameters commands='["systemctl status stride-first-load --no-pager","cat /var/lib/clickhouse/first-load.state","tail -40 /var/log/stride-first-load.log","curl -fsS http://127.0.0.1/status"]'
 ```
 
-`ingest/catchup.sh` deliberately does not do this. It walks forward from the newest
-snapshot actually loaded, and on an empty database there is no such snapshot, so it
-says so and exits 0 rather than guessing a start date.
+The `deploy` workflow prints the same three things into its job summary, so an ordinary push
+reports where the load got to. It is not a gate: a node still loading history is a working
+deploy, and that is the design.
 
 ### Schema changes
 
@@ -503,6 +688,7 @@ serves ministry data that is already public — and so is the data.
 | --- | --- |
 | `terraform plan` output, as a job summary or a PR comment | It is a diff of resource attributes, and the only personal value in this config is `budget_email`, now `sensitive` |
 | `GET /status` — ingest freshness from `system.view_refreshes` and the newest snapshot id | Operational state with nothing secret in it, and the thing a reader actually wants: is the data current. Measured at 55 ms, behind the CDN |
+| `GET /coverage` — per-day data health from `ingest_day_health`: `day`, `snapshots`, `vehicle_locations`, `duplicate_ids`, `rides`, `rides_with_duration`, `rides_linked_to_gtfs`, `measured_at`, newest day first, `?limit=` defaulting to 90 and capped at 10,000 | Public for the same reason, and it answers the question production cannot. Finding 13 is twenty months of "zero buses ran" that reads as data rather than as an outage, because `/gtfs_rides_agg/group_by` returns 0 either way. Here a day says how many snapshots arrived, how many rows were derived from them, and whether its ids are sound — so "nothing ran", "nothing arrived" and "we broke it" are three different rows and not one |
 | `infra/rates.json` and `scripts/measure-cost.py` | Public rates and a script. An estimate nobody can re-derive is one nobody should act on |
 
 **The state bucket stays private, and the honest reason is not secrets.** This configuration
@@ -617,9 +803,17 @@ established is that it is not a capacity problem.
 
 **And at the next step up, out and up cost the same.** A two-shard cluster is two instances,
 the same total disk split between them, and two addresses: $133.42 a month. A single
-`t4g.xlarge` with twice the cores and twice the memory is $129.76. The same money, except the
-bigger box also lifts the 4 GiB ceiling that an unfiltered `/siri_rides/list` hits, and needs
+`t4g.xlarge` with twice the cores and twice the memory is $129.76. The same money, and it needs
 no distributed tables, no cluster configuration and no replication to operate.
+
+This paragraph used to add "and it lifts the 4 GiB ceiling that an unfiltered
+`/siri_rides/list` hits". That measurement was taken against a 4 GiB cap, and the local cap is
+now 8 GiB (`ingest/local.xml`), chosen to match the `t4g.large` this module actually deploys —
+so the old figure measured a box stricter than the target and says nothing about this one.
+**Whether 8 GiB is enough for that call is not measured.** Re-measuring it means running an
+unfiltered three-way join on the shared database that the ingest and enrichment chains are
+writing to, and a `MEMORY_LIMIT_EXCEEDED` there is not confined to the query that caused it.
+It is worth doing on a throwaway instance and it has not been done.
 
 So the order is: fix the query, then buy a bigger box, and only then think about a second one.
 The cases where a second one is actually the answer are:
@@ -664,8 +858,19 @@ Honest status, so nobody deploys this expecting a finished system:
 
 - **27 of 27 endpoints** match production byte for byte, over 48 differential tests.
 - **The pipeline is complete.** SIRI flows `ingest/siri.sql` → `ingest/enrich.sql` → the API,
-  and GTFS loads a day in 35 s through `ingest/gtfs.sh`. The database holds 1,405 consecutive
-  days, 2023-01-01 to today.
+  and GTFS loads a day in 35 s through `ingest/gtfs.sh`.
+- **The local database is not a complete history, so it is not yet the thing to copy.**
+  Measured 2026-11-07: September and October 2026 were never loaded, most of November is
+  missing, 2026-08-19 and 2026-08-20 are short at the download (455 and 1,318 snapshots against
+  about 1,430), and twenty-five days carry duplicate ids. `scripts/first-load.sh` is written
+  against a sound source and does not check whether the backup it restores is one —
+  `GET /coverage` and `ingest/verify.sql` are what answer that, and they have to be clean
+  before the `publish` stage is allowed to define what every later instance holds.
+- **The first load has not been run on AWS.** Every mechanism in it is tested — the streaming
+  dump load, the stage machine's skip, retry and refusal, the chain being stopped and restarted
+  around a reload, `BACKUP`/`RESTORE` round-tripping a 22-table database with its projections —
+  but on a sandbox ClickHouse against a miniature dump, not on an instance against the real
+  one. The S3 transport and the STS hop that signs it are unverified.
 - **`gtfs_ride_stop` is loaded but not refreshed.** It is a quarter of the database on its own
   and the daily GTFS loader replaces the rest of the GTFS tables, not this one.
 - **Nothing has run unattended for 24 hours.** Ingest and enrichment cost 14.7 s per hour of
