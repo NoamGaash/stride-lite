@@ -62,10 +62,18 @@ jobs:
       - name: Apply the enrichment
         run: ./clickhouse client --database stride --multiquery < ingest/enrich.sql
 
+      # ingest/enrich-once.sql ends by writing ingest_day_health from
+      # ingest_day_health_src, which this file creates, so the step below that
+      # runs enrich-once fails with UNKNOWN_FUNCTION without it. infra/bootstrap.sh
+      # installs it through scripts/first-load.sh and scripts/deploy.sh applies it
+      # on every deploy, so a CI that skips it is testing a chain nothing deploys.
+      - name: Apply the per-day health table and its refresh
+        run: ./clickhouse client --database stride --multiquery < ingest/health.sql
+
       - name: Expect the whole chain to be registered and healthy
         run: |
           n=$(./clickhouse client --query "SELECT count() FROM system.view_refreshes WHERE database='stride'")
-          test "$n" = 10 || { echo "got $n refreshable views, want 10"; exit 1; }
+          test "$n" = 11 || { echo "got $n refreshable views, want 11"; exit 1; }
           bad=$(./clickhouse client --query "SELECT count() FROM system.view_refreshes WHERE database='stride' AND exception != ''")
           test "$bad" = 0 || {
             ./clickhouse client --query "SELECT view, exception FROM system.view_refreshes WHERE exception != '' FORMAT Vertical"

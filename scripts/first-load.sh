@@ -228,7 +228,17 @@ publish_backup() {
     return 0
   fi
   echo "publishing to $BACKUP_PUBLISH so no later instance repeats the public rebuild"
-  CH_DB="$CH_DB" CH_CLIENT="$CH" ./scripts/backup.sh save "$BACKUP_PUBLISH"
+  # A failure here is reported rather than swallowed, and it leaves the unit
+  # retrying — which is right, because an unpublished copy means the next
+  # instance reads Hasadna's bucket again. It is worth being loud that the data
+  # itself is fine: every earlier stage finished, so this node is complete and
+  # serving, and only the copy for the *next* node is missing.
+  if ! CH_DB="$CH_DB" CH_CLIENT="$CH" ./scripts/backup.sh save "$BACKUP_PUBLISH"; then
+    echo "could not publish to $BACKUP_PUBLISH." >&2
+    echo "This node is loaded and serving — the whole history is here. What is missing" >&2
+    echo "is the copy that would spare the next instance a rebuild from public data." >&2
+    return 1
+  fi
 }
 
 gtfs_today() {
