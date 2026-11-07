@@ -284,3 +284,18 @@ ORDER BY (recorded_at_time, id)
 SETTINGS index_granularity = 8192
 ;
 
+
+CREATE TABLE stride.ingest_day_health
+(
+    `day` Date,
+    `snapshots` UInt32,
+    `vehicle_locations` UInt64,
+    `duplicate_ids` UInt64,
+    `rides` UInt64,
+    `rides_with_duration` UInt64,
+    `rides_linked_to_gtfs` UInt64,
+    `measured_at` DateTime
+)
+ENGINE = ReplacingMergeTree(measured_at)
+ORDER BY day
+;

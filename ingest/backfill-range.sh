@@ -10,9 +10,11 @@
 #
 # Enriches after each day instead of once at the end, because the enrichment's
 # dedup reads the landing table whole and the landing table is what grows.
-# A month's rows are dropped once that month is enriched, which the monthly
-# PARTITION BY in db/raw.sql makes instant; the month still being ingested live
-# is left alone. `siri_snapshot_seen` survives the drop, so nothing is re-read.
+#
+# The landing rows are then KEPT. They are the only local copy of what was
+# downloaded, and enrich-once.sql reads nothing but them, so keeping them is
+# what makes a repair local instead of a second download out of Hasadna's
+# bucket. DROP_LANDING=1 asks for the old behaviour; drop_month says why not to.
 #
 # ENRICH=0 loads the landing table and stops there, which is what
 # ingest/catchup.sh wants: the live chain in ingest/enrich.sql reads the landing
@@ -43,6 +45,8 @@ to=${2:?}
 # partial and worth asking S3 about again.
 MIN_SNAPSHOTS=${MIN_SNAPSHOTS:-1400}
 ENRICH=${ENRICH:-1}
+# Off by default: see drop_month for why keeping them is worth the disk.
+DROP_LANDING=${DROP_LANDING:-0}
 
 ch() { $CH --database "$CH_DB" "$@"; }
 
@@ -90,12 +94,33 @@ stop_views() {
   echo "stopped the refresh chain for the duration of this backfill"
 }
 
+# The landing rows for a month are the only local copy of what was downloaded,
+# and enrich-once.sql reads nothing else — so while they are here, re-enriching
+# a day costs nothing and reaches no network. Dropping them turns any later
+# mistake into a second download from somebody else's bucket.
+#
+# That trade is not close. A month of landing rows is about 2.8 GiB, so the whole
+# archive is tens of GiB; re-fetching a month is thousands of files out of a
+# non-profit's S3, billed to them and not to us. So this does nothing unless
+# asked, and refuses when asked about a month it cannot verify: discarding the
+# local copy of data already known to be damaged is how a cheap repair becomes
+# an expensive one.
 drop_month() {
   local part=$1
+  [ "$DROP_LANDING" = 1 ] || return 0
   [ "$part" = "$(date -u +'%Y/%m')" ] && return 0
   local n
   n=$(ch --query "SELECT count() FROM system.parts WHERE database='$CH_DB' AND table='siri_vehicle_location_raw' AND partition='$part' AND active")
   [ "$n" = 0 ] && return 0
+
+  local first last
+  first="${part//\//-}-01"
+  last=$(date -u -d "$first + 1 month - 1 day" +%F)
+  if ! ch --param_from="$first" --param_to="$last" --queries-file "$here/verify.sql" >/dev/null 2>&1; then
+    echo "  NOT dropping landing rows for $part: it does not verify, and they are the only local copy" >&2
+    return 0
+  fi
+
   echo "  dropping landing rows for $part"
   ch --query "ALTER TABLE siri_vehicle_location_raw DROP PARTITION '$part'"
 }

@@ -5,7 +5,7 @@ import { query, scalar, lit, ClickHouseError } from './ch'
 import { buildQuery, BadRequest, BadInput, TzRequired, UnknownOrderField } from './sql'
 import { endpoints, getEndpoints } from './registry'
 import { rawEndpoints, wrap, type RawEndpointDef } from './raw'
-import { statusSql } from './status'
+import { coverageSql, statusSql } from './status'
 
 const PORT = Number(process.env.PORT ?? 8080)
 const HOST = process.env.HOST ?? '0.0.0.0'
@@ -141,6 +141,17 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/status') {
       const [row] = await query(statusSql(DB))
       return await send(200, row ?? {})
+    }
+
+    // Also ours rather than upstream's, and public for the same reason: a
+    // reader who sees a flat line on a chart should be able to tell an outage
+    // from a quiet day without asking anyone.
+    if (url.pathname === '/coverage') {
+      const raw = url.searchParams.get('limit')
+      if (raw !== null && !/^\d{1,5}$/.test(raw)) throw new BadRequest('limit must be a number')
+      const limit = raw === null ? 90 : Number(raw)
+      if (limit < 1 || limit > 10000) throw new BadRequest('limit must be between 1 and 10000')
+      return await send(200, (await query(coverageSql(DB, limit))).map(normalize))
     }
 
     const listDef = byPath.get(url.pathname)

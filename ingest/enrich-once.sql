@@ -30,3 +30,7 @@ SELECT * FROM enrich_duration_src(
     from = toDateTime({day:Date}) - INTERVAL 6 HOUR,
     to = toDateTime({day:Date}) + INTERVAL 30 HOUR,
     settled_before = toDateTime({day:Date}) + INTERVAL 24 HOUR);
+
+-- What the day turned out to be worth, recorded where the API can serve it.
+-- Last, so it measures the rows the six steps above just wrote.
+INSERT INTO ingest_day_health SELECT * FROM ingest_day_health_src(day = {day:Date});
