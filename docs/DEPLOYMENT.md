@@ -126,6 +126,11 @@ region, $0.09/GB to the internet**, and the `AmazonS3` eu-west-1 offer file carr
 same-region transfer line at all — a reader in eu-west-1 costs the owner nothing but requests,
 at $0.0004 per 1,000 GETs.
 
+**Every dollar below treats a GB as 10⁹ bytes**, which is the convention the byte counts are
+converted on and not one that was verified against how AWS meters transfer. If AWS's GB is
+2³⁰ instead, each figure is 7% smaller — the dump is $2.88 of transfer rather than $3.09. The
+larger is quoted throughout.
+
 | | To Hasadna | To us | Wall clock |
 | --- | --- | --- | --- |
 | **(c) `RESTORE` our own copy** | **$0** | $5.86/month of S3 Standard while it sits there | 35 min floor, see below |

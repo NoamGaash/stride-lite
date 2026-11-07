@@ -43,6 +43,10 @@ provider "aws" {
 # 44,293 objects — about 7.4 MiB an hour of feed, not the 13.2 MiB this comment
 # used to claim. The dump is 154,630,881,726 bytes.
 #
+# Dollars below treat a GB as 10^9 bytes, which is how the byte counts were
+# converted and not something verified against how AWS meters transfer; at 2^30
+# every figure is 7% smaller. The larger is quoted.
+#
 # So, for the whole of it:
 #
 #   first load, dump + the 162 days after it   $3.66 of transfer and $0.09 of
