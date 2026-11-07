@@ -46,10 +46,10 @@ jobs:
         env:
           CH_CLIENT: ./clickhouse client
         run: ./scripts/apply-schema.sh
-      - name: Expect the 16 tables, siri_ride_duration, the aggregation table and its refresh, and the migration record
+      - name: Expect all 21 schema tables, views and migration metadata
         run: |
           n=$(./clickhouse client --query "SELECT count() FROM system.tables WHERE database='stride'")
-          test "$n" = 20 || { echo "got $n tables, want 20"; exit 1; }
+          test "$n" = 21 || { echo "got $n tables, want 21"; exit 1; }
 
       - name: Expect apply-schema to be idempotent
         run: ./scripts/apply-schema.sh
