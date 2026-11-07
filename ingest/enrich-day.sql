@@ -6,6 +6,14 @@
 -- cheaper per day the more days they cover; these two are per-day by
 -- definition — a duration needs a window, and a health row is a day's verdict.
 --
+-- There is deliberately no "the chain must be off" guard here, unlike in
+-- enrich-once.sql and repair.sql. Neither statement below mints an id:
+-- siri_ride_duration is keyed on siri_ride_id and ingest_day_health on the day,
+-- both of which come from the data. Two of these running at once would write
+-- the same rows twice, which a ReplacingMergeTree and an idempotent insert
+-- absorb — not two different rows under one id, which is the failure the guard
+-- exists for.
+--
 --   clickhouse client --database stride --multiquery \
 --     --param_day=2026-06-02 < ingest/enrich-day.sql
 
