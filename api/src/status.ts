@@ -44,11 +44,15 @@ export function statusSql(db: string): string {
 export const COVERAGE_FIELDS = [
   'day',
   'snapshots',
+  'snapshots_expected',
   'vehicle_locations',
   'duplicate_ids',
+  'duplicate_readings',
   'rides',
   'rides_with_duration',
   'rides_linked_to_gtfs',
+  'duplicate_ride_ids',
+  'duplicate_ride_stop_keys',
   'measured_at',
 ] as const
 
@@ -63,6 +67,19 @@ export const COVERAGE_FIELDS = [
  * snapshots arrived, how many rows were derived from them, and whether its ids
  * are sound — so "nothing ran", "nothing arrived" and "we broke it" are three
  * different rows and not one.
+ *
+ * `duplicate_ids` is siri_vehicle_location's alone, which is why the two
+ * `duplicate_ride_*` columns name their own table: a reader could not otherwise
+ * tell the scope, and the worst of the damage this endpoint exists to report
+ * was in siri_ride_stop. `duplicate_readings` is the one that catches the
+ * failure the id columns cannot see at all — the same reading stored twice
+ * under two different ids. It is never zero on a healthy day either: about 785
+ * duplicate readings an hour are legitimate upstream, so the judgement is a
+ * ratio against `vehicle_locations` and ingest/verify.sql puts it at 1.01.
+ *
+ * `snapshots_expected` is a ceiling and not a floor. 1440 is one snapshot a
+ * minute; a healthy day lands about 1,430, and 2026-08-19 holds 455 because the
+ * archive itself holds 455. A shortfall is not by itself our failure.
  *
  * Newest first, because the question is almost always about recent data, and
  * FINAL because the table is a ReplacingMergeTree keyed on the day: a repaired

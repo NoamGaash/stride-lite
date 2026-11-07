@@ -10,6 +10,26 @@
 --   clickhouse client --database stride --multiquery \
 --     --param_day=2026-06-02 < ingest/enrich-once.sql
 
+-- The chain must be off. This is the first statement for the reason the file
+-- exists at all: running these INSERTs while ingest/enrich.sql's refreshable
+-- views are enabled is the bug that damaged twenty-nine days. Both paths mint
+-- `id` as max(id) + row_number(), so both read the same starting max and hand
+-- the same numbers to different readings.
+--
+-- backfill-range.sh and repair-range.sh stop the chain before calling this, so
+-- for them the check always passes. It is here for the caller that does not:
+-- a person at a terminal, which is how it happened. Measured: with the chain
+-- Scheduled this throws, and the six INSERTs below never run.
+--
+-- A refresh already in flight when the views were stopped is NOT covered here —
+-- SYSTEM STOP VIEW prevents the next refresh and does not cancel the running
+-- one. chain-guard.sh waits that out; this only refuses the obvious mistake.
+SELECT throwIf(
+    count() > 0,
+    'the enrichment chain is enabled: SYSTEM STOP VIEW it first, or use ingest/backfill-range.sh'
+) FROM system.view_refreshes
+WHERE database = currentDatabase() AND startsWith(view, 'enrich_') AND status != 'Disabled';
+
 INSERT INTO siri_route SELECT * FROM enrich_route_src;
 INSERT INTO siri_stop SELECT * FROM enrich_stop_src;
 INSERT INTO siri_snapshot SELECT * FROM enrich_snapshot_src;

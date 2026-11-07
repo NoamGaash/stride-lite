@@ -185,6 +185,13 @@ ENGINE = MergeTree
 ORDER BY siri_ride_id
 ;
 
+-- `lightweight_mutation_projection_mode` is here because of ingest/repair.sql.
+-- This table carries projections (db/projections.sql), and a lightweight delete
+-- refuses to touch a table with one until the table itself says what should
+-- happen to them — it is a MergeTree setting, so a SETTINGS clause on the
+-- DELETE, a session `SET` and a client flag are each accepted and then ignored.
+-- `rebuild` and not `drop` because the projections are what make the ingest's
+-- lookups seeks rather than scans of billions of rows.
 CREATE TABLE stride.siri_ride
 (
     `id` Int32,
@@ -204,9 +211,16 @@ CREATE TABLE stride.siri_ride
 )
 ENGINE = MergeTree
 ORDER BY id
-SETTINGS index_granularity = 8192
+SETTINGS index_granularity = 8192, lightweight_mutation_projection_mode = 'rebuild'
 ;
 
+-- `lightweight_mutation_projection_mode` is here because of ingest/repair.sql.
+-- This table carries projections (db/projections.sql), and a lightweight delete
+-- refuses to touch a table with one until the table itself says what should
+-- happen to them — it is a MergeTree setting, so a SETTINGS clause on the
+-- DELETE, a session `SET` and a client flag are each accepted and then ignored.
+-- `rebuild` and not `drop` because the projections are what make the ingest's
+-- lookups seeks rather than scans of billions of rows.
 CREATE TABLE stride.siri_ride_stop
 (
     `id` Int64,
@@ -218,7 +232,7 @@ CREATE TABLE stride.siri_ride_stop
 )
 ENGINE = MergeTree
 ORDER BY id
-SETTINGS index_granularity = 8192
+SETTINGS index_granularity = 8192, lightweight_mutation_projection_mode = 'rebuild'
 ;
 
 CREATE TABLE stride.siri_route
@@ -289,11 +303,15 @@ CREATE TABLE stride.ingest_day_health
 (
     `day` Date,
     `snapshots` UInt32,
+    `snapshots_expected` UInt32,
     `vehicle_locations` UInt64,
     `duplicate_ids` UInt64,
+    `duplicate_readings` UInt64,
     `rides` UInt64,
     `rides_with_duration` UInt64,
     `rides_linked_to_gtfs` UInt64,
+    `duplicate_ride_ids` UInt64,
+    `duplicate_ride_stop_keys` UInt64,
     `measured_at` DateTime
 )
 ENGINE = ReplacingMergeTree(measured_at)

@@ -42,7 +42,8 @@ from=${1:?usage: backfill-range.sh <from YYYY-MM-DD> <to YYYY-MM-DD>}
 to=${2:?}
 
 # A healthy requester writes about 1,430 snapshots a day. Below this a day is
-# partial and worth asking S3 about again.
+# partial and worth asking S3 about again. Measured against 2026-08-19, which
+# holds 455, and 2026-08-20, which holds 1,318: both are genuinely short.
 MIN_SNAPSHOTS=${MIN_SNAPSHOTS:-1400}
 ENRICH=${ENRICH:-1}
 # Off by default: see drop_month for why keeping them is worth the disk.
@@ -50,49 +51,8 @@ DROP_LANDING=${DROP_LANDING:-0}
 
 ch() { $CH --database "$CH_DB" "$@"; }
 
-# The refreshable views this run has to silence: discovered rather than listed,
-# so one added later is covered without touching this script, and skipping those
-# already Disabled so the restart puts back exactly what was running. Starting a
-# view somebody stopped on purpose would be this script changing state that is
-# not its own.
-refreshable_views() {
-  ch --query "
-    SELECT view FROM system.view_refreshes
-    WHERE database = '$CH_DB' AND status != 'Disabled' FORMAT TSV"
-}
-
-stopped_views=""
-
-restart_views() {
-  [ -n "$stopped_views" ] || return 0
-  for v in $stopped_views; do
-    ch --query "SYSTEM START VIEW \`$v\`" || echo "  WARNING: could not restart view $v" >&2
-  done
-  echo "restarted the refresh chain"
-  stopped_views=""
-}
-
-# Stops the chain and waits for whatever refresh is already in flight, because
-# SYSTEM STOP VIEW prevents the next refresh and does not cancel the running one.
-stop_views() {
-  stopped_views=$(refreshable_views)
-  [ -n "$stopped_views" ] || return 0
-  for v in $stopped_views; do
-    ch --query "SYSTEM STOP VIEW \`$v\`"
-  done
-  local waited=0 running
-  while :; do
-    running=$(ch --query "
-      SELECT count() FROM system.view_refreshes
-      WHERE database = '$CH_DB' AND status = 'Running'")
-    [ "$running" = 0 ] && break
-    [ "$waited" -ge 1800 ] && { echo "a refresh has been running for 30 min; giving up rather than racing it" >&2; exit 1; }
-    echo "  waiting for $running refresh(es) already in flight"
-    sleep 30
-    waited=$((waited + 30))
-  done
-  echo "stopped the refresh chain for the duration of this backfill"
-}
+# shellcheck source=ingest/chain-guard.sh
+. "$here/chain-guard.sh"
 
 # The landing rows for a month are the only local copy of what was downloaded,
 # and enrich-once.sql reads nothing else — so while they are here, re-enriching
@@ -125,9 +85,40 @@ drop_month() {
   ch --query "ALTER TABLE siri_vehicle_location_raw DROP PARTITION '$part'"
 }
 
+# Is this day finished? The snapshot count alone was the old answer and it was
+# the wrong question when this script enriches: siri_snapshot_seen says raw rows
+# landed, not that anything was derived from them and not that what was derived
+# is sound. A day that landed in full and then took duplicate ids from an
+# overlapping pass passed that check, which is how twenty-nine damaged days
+# survived a resume.
+#
+# So with ENRICH=1 the answer is the day's own health row, written by
+# enrich-once.sql at the end of the day's pass: enough snapshots, locations
+# derived from them, and no duplicate ids. FINAL because ingest_day_health is a
+# ReplacingMergeTree keyed on the day, and a repair writes a second verdict that
+# must outrank the first.
+#
+# With ENRICH=0 — catchup.sh, which lands rows and leaves them for the live
+# chain — there is no health row to read and landing is the whole job, so the
+# snapshot count is the right question after all.
+day_is_done() {
+  local landed
+  landed=$(ch --query "
+    SELECT count() FROM siri_snapshot_seen FINAL
+    WHERE siri_snapshot_id LIKE '$(date -u -d "$1" +'%Y/%m/%d')/%'")
+  [ "$landed" -ge "$MIN_SNAPSHOTS" ] || return 1
+  [ "$ENRICH" = 1 ] || return 0
+  [ "$(ch --query "
+    SELECT count() FROM ingest_day_health FINAL
+    WHERE day = toDate('$1')
+      AND snapshots >= $MIN_SNAPSHOTS
+      AND vehicle_locations > 0
+      AND duplicate_ids = 0")" = 1 ]
+}
+
 if [ "$ENRICH" = 1 ]; then
-  trap restart_views EXIT INT TERM
-  stop_views
+  trap chain_restart EXIT INT TERM
+  chain_stop
 fi
 
 day=$from
@@ -141,14 +132,12 @@ while [ "$(date -u -d "$day" +%s)" -le "$end" ]; do
     month=$this_month
   fi
 
-  have=$(ch --query "
-    SELECT count() FROM siri_snapshot_seen FINAL
-    WHERE siri_snapshot_id LIKE '$(date -u -d "$day" +'%Y/%m/%d')/%'")
-
-  if [ "$have" -ge "$MIN_SNAPSHOTS" ]; then
-    echo "$day: $have snapshots already loaded, skipping"
+  if day_is_done "$day"; then
+    echo "$day: already loaded, enriched and sound, skipping"
   else
-    echo "$day: $have snapshots loaded, fetching"
+    echo "$day: $(ch --query "
+      SELECT count() FROM siri_snapshot_seen FINAL
+      WHERE siri_snapshot_id LIKE '$(date -u -d "$day" +'%Y/%m/%d')/%'") snapshots loaded, fetching"
     # shellcheck disable=SC2086
     CH_DB="$CH_DB" CH_CLIENT="$CH" "$here/backfill.sh" $(date -u -d "$day" +'%Y %m %d')
     if [ "$ENRICH" = 1 ]; then

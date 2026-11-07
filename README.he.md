@@ -1,6 +1,6 @@
 # stride-lite
 
-[English](README.md) · **[מי החליט מה](#מי-החליט-מה)** · **[מה זה גילה על הפרודקשן](docs/FINDINGS.he.md)** · [עלות, ביצועים, tradeoffs](docs/DEPLOYMENT.he.md) · [מפת דרכים](ROADMAP.he.md) · [מדידות](docs/BENCHMARKS.md) (אנגלית) · [הרצה מקומית](docs/LOCAL-DB.he.md)
+[English](README.md) · **[מי החליט מה](#מי-החליט-מה)** · **[מה זה גילה על הפרודקשן](docs/FINDINGS.he.md)** · [עלות, ביצועים, tradeoffs](docs/DEPLOYMENT.he.md) · [מפת דרכים](ROADMAP.he.md) · [מדידות](docs/BENCHMARKS.md) (אנגלית) · **[הימים שקלקלנו](docs/DATA-REPAIR.he.md)** · [הרצה מקומית](docs/LOCAL-DB.he.md)
 
 מימוש מחדש, מאפס, של ה-backend של
 [Open Bus Stride](https://github.com/hasadna/open-bus-stride-api)
