@@ -37,7 +37,7 @@ ch() { $CH --database "$CH_DB" "$@"; }
 # ingest is an `s3(...)` table function, and the files below are everything this
 # script hands to the server — so if a future edit puts a fetch into one of
 # them, this stops before a byte of Hasadna's egress is spent rather than after.
-for f in repair.sql enrich-once.sql verify.sql; do
+for f in repair.sql enrich-once.sql enrich-day.sql verify.sql; do
   if grep -qiE '\bs3(Cluster)?[[:space:]]*\(' "$here/$f"; then
     echo "$f reads S3: this script is the local-only path and will not run it" >&2
     exit 1
@@ -81,22 +81,59 @@ echo "   auditing siri_ride from id $ride_floor, siri_ride_stop from id $ride_st
 #
 # So: derive everything, then judge everything, then record the judgement.
 
-# Phase 1 — derive, oldest day first, because scheduled_start_time is an argMin
-# over the snapshots in the batch. The marks are what keeps it one day at a
-# time: siri_feed offers back every snapshot whose mark is gone and has no date
-# filter of its own, so clearing the whole range at once would ask a single
-# query to re-derive 133 million landing rows.
+# Phase 1 — derive, oldest first, in batches.
+#
+# The marks are what decides a pass's scope: siri_feed offers back every
+# snapshot whose mark is gone and has no date filter of its own. So clearing a
+# week of marks and running one pass covers the week.
+#
+# Batching matters more than it looks. One pass reads 617,028,034 rows and
+# 12.62 GiB whatever it covers, because the cost is re-reading the landing table
+# — 4.1 scans of the 150,966,451 rows it now holds — and not the rows produced.
+# Measured, a one-day batch took about 24 minutes, almost all of it those scans,
+# which put a 23-day repair at nine hours. A seven-day batch pays them once for
+# seven days.
+#
+# The ceiling on BATCH_DAYS is memory, not correctness: the batch's locations
+# are numbered by one row_number() over the whole batch, so a wider batch is a
+# wider sort. If a batch dies, its days' marks are already cleared and its rows
+# are absent, so re-running the same command re-derives exactly those days —
+# the loop is idempotent at batch granularity.
+#
+# Batching is also no worse for scheduled_start_time, which is the reason the
+# order is oldest-first: that column is an argMin over the snapshots in the
+# batch, so a wider batch means a ride spanning two days inside it is dated from
+# the earlier one rather than from whichever day happened to be processed first.
+BATCH_DAYS=${BATCH_DAYS:-7}
+
 day=$from
 end=$(date -u -d "$to" +%s)
 while [ "$(date -u -d "$day" +%s)" -le "$end" ]; do
-  echo "== deriving $day"
-  ch --query "
-    DELETE FROM siri_snapshot_enriched
-    WHERE siri_snapshot_id IN (
-        SELECT id FROM siri_snapshot
-        WHERE snapshot_id LIKE '$(date -u -d "$day" +'%Y/%m/%d')/%')"
-  ch --multiquery --param_day="$day" < "$here/enrich-once.sql"
-  day=$(date -u -d "$day + 1 day" +%F)
+  batch_end=$(date -u -d "$day + $((BATCH_DAYS - 1)) days" +%F)
+  [ "$(date -u -d "$batch_end" +%s)" -gt "$end" ] && batch_end=$to
+
+  echo "== deriving $day .. $batch_end"
+  d=$day
+  while [ "$(date -u -d "$d" +%s)" -le "$(date -u -d "$batch_end" +%s)" ]; do
+    ch --query "
+      DELETE FROM siri_snapshot_enriched
+      WHERE siri_snapshot_id IN (
+          SELECT id FROM siri_snapshot
+          WHERE snapshot_id LIKE '$(date -u -d "$d" +'%Y/%m/%d')/%')"
+    d=$(date -u -d "$d + 1 day" +%F)
+  done
+
+  ch --multiquery < "$here/enrich-once.sql"
+
+  # The per-day tail, which does not get cheaper in a batch: a duration needs a
+  # window and a health row is one day's verdict.
+  d=$day
+  while [ "$(date -u -d "$d" +%s)" -le "$(date -u -d "$batch_end" +%s)" ]; do
+    ch --multiquery --param_day="$d" < "$here/enrich-day.sql"
+    d=$(date -u -d "$d + 1 day" +%F)
+  done
+
+  day=$(date -u -d "$batch_end + 1 day" +%F)
 done
 
 # Phase 2 — judge. Per day and not per range: the day report holds a uniqExact

@@ -93,7 +93,7 @@ drop_month() {
 # survived a resume.
 #
 # So with ENRICH=1 the answer is the day's own health row, written by
-# enrich-once.sql at the end of the day's pass: enough snapshots, locations
+# enrich-day.sql at the end of the day's pass: enough snapshots, locations
 # derived from them, and no duplicate ids. FINAL because ingest_day_health is a
 # ReplacingMergeTree keyed on the day, and a repair writes a second verdict that
 # must outrank the first.
@@ -141,7 +141,8 @@ while [ "$(date -u -d "$day" +%s)" -le "$end" ]; do
     # shellcheck disable=SC2086
     CH_DB="$CH_DB" CH_CLIENT="$CH" "$here/backfill.sh" $(date -u -d "$day" +'%Y %m %d')
     if [ "$ENRICH" = 1 ]; then
-      ch --multiquery --param_day="$day" < "$here/enrich-once.sql"
+      ch --multiquery < "$here/enrich-once.sql"
+      ch --multiquery --param_day="$day" < "$here/enrich-day.sql"
       # Checked here and not at the end of the range: the failure this guards
       # against duplicates a day at a time, and finding out after three weeks
       # of fetching means re-fetching three weeks.
