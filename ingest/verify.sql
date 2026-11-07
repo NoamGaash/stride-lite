@@ -111,6 +111,14 @@ WHERE recorded_at_time >= toDateTime({from:Date})
 -- purpose: neither has a usable time column — siri_ride.scheduled_start_time is
 -- an argMin the feed can revise, and siri_ride_stop has no time at all — while
 -- both are sorted by id, which is the column the failure corrupts.
+--
+-- Each of the four reads the base table and never a projection. A gate must not
+-- depend on a projection being fresh, and here that is not hypothetical: a
+-- lightweight delete leaves projections serving the rows it deleted, so the
+-- natural-key count for 2026-08-01's rides read 1,732,181 through
+-- `by_siri_ride` and 2,860 without it. ingest/repair.sql uses heavy mutations
+-- so the two agree; this setting means the gate is right even when something
+-- else has not been.
 
 SELECT
     sum(extra) AS extra_rows,
@@ -122,7 +130,7 @@ FROM (
     WHERE id >= {ride_from_id:Int64}
     GROUP BY id
     HAVING count() > 1
-);
+) SETTINGS optimize_use_projections = 0;
 
 SELECT
     sum(extra) AS extra_rows,
@@ -134,7 +142,7 @@ FROM (
     WHERE id >= {ride_from_id:Int64}
     GROUP BY siri_route_id, journey_ref, vehicle_ref
     HAVING count() > 1
-);
+) SETTINGS optimize_use_projections = 0;
 
 SELECT
     sum(extra) AS extra_rows,
@@ -146,7 +154,7 @@ FROM (
     WHERE id >= {ride_stop_from_id:Int64}
     GROUP BY id
     HAVING count() > 1
-);
+) SETTINGS optimize_use_projections = 0;
 
 -- The one that explains the doubling, and the only check here that was failing
 -- silently rather than loudly: measured, 9,161,623 duplicate ids and 1,287,638
@@ -162,4 +170,4 @@ FROM (
     WHERE id >= {ride_stop_from_id:Int64}
     GROUP BY siri_ride_id, siri_stop_id, `order`
     HAVING count() > 1
-);
+) SETTINGS optimize_use_projections = 0;

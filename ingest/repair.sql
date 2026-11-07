@@ -148,24 +148,47 @@ WHERE (siri_ride_id, siri_stop_id, `order`) IN (SELECT siri_ride_id, siri_stop_i
 -- Lightweight deletes, because siri_vehicle_location is 120 GiB in a single
 -- partition and a mutation would rewrite all of it.
 
+-- Lightweight, and safe to be: neither this table nor siri_vehicle_location
+-- carries a projection, so there is nothing for a mask to go stale against.
+-- siri_vehicle_location especially wants the lightweight form — it is 120 GiB
+-- in one partition, and a heavy mutation would rewrite all of it.
 DELETE FROM siri_ride_duration WHERE siri_ride_id IN (SELECT id FROM repair_ride_seen);
 
--- These two carry projections, and a lightweight delete refuses to touch a
--- table with one until it is told what to do about them. The decision is
--- `rebuild` and it lives on the table in db/schema.sql, not here: it is a
--- MergeTree setting, so a query-level SETTINGS clause, a `SET` and a client
--- flag are all read and then ignored — measured, all three still fail with
--- "mode is set to THROW".
+-- These two are HEAVY mutations and the rest are lightweight deletes. That is
+-- not a style choice; a lightweight delete on either of these tables silently
+-- corrupts them, and the mechanism is worth stating because the setting that
+-- looks like it prevents this does not.
 --
--- `rebuild` rather than `drop` because the projections are not decoration:
--- `by_natural_key` is what makes the ride lookup above a seek and
--- `by_siri_ride` the same for stops, and `drop` would leave db/projections.sql
--- to be reapplied by hand. It is affordable because the damage sits at the top
--- of the id space: measured, every row of the damaged band is in 7 parts
--- totalling 940 MiB out of 61 GiB.
-DELETE FROM siri_ride_stop WHERE id IN (SELECT id FROM repair_ride_stop_broken);
+-- Both tables carry projections (db/projections.sql). A lightweight delete
+-- refuses to touch a table with one until it is told what to do about them, and
+-- the available answer looks like `lightweight_mutation_projection_mode =
+-- 'rebuild'`. Measured, on a 2M-row table with one projection: after
+-- `DELETE FROM t WHERE ride = 7` under `rebuild`, the base table returns 0 rows
+-- for ride 7 and **the projection still returns 2,000**. The setting only
+-- permits the delete; it does not rebuild anything. `ALTER TABLE ... DELETE`
+-- over the same shape returns 0 both ways.
+--
+-- That is not a cosmetic difference here. `enrich_ride_stop_src` dedups with
+-- `NOT IN (SELECT ... FROM siri_ride_stop WHERE siri_ride_id IN ...)`, which is
+-- exactly the lookup `by_siri_ride` exists to serve — so a stale projection
+-- makes the re-derivation skip stops it should have re-minted, and the repair
+-- quietly produces less data than it deleted. It also makes any integrity query
+-- that filters on siri_ride_id report duplicates that no longer exist: before
+-- this was found, the natural-key count for 2026-08-01's rides read 1,732,181
+-- through the projection and 2,860 without it.
+--
+-- A heavy mutation is affordable because the damage is at the top of the id
+-- space and the predicate is on the sort key, so only the parts holding those
+-- ids are rewritten: measured, 7 parts totalling 940 MiB out of 61 GiB.
+--
+-- If a lightweight delete has already been run on either table, the parts that
+-- carry its mask need `ALTER TABLE ... APPLY DELETED MASK` to rebuild their
+-- projections. Measured: that fixes the 2,000 phantom rows above.
+ALTER TABLE siri_ride_stop DELETE WHERE id IN (SELECT id FROM repair_ride_stop_broken)
+SETTINGS mutations_sync = 2;
 
-DELETE FROM siri_ride WHERE id IN (SELECT id FROM repair_ride_broken);
+ALTER TABLE siri_ride DELETE WHERE id IN (SELECT id FROM repair_ride_broken)
+SETTINGS mutations_sync = 2;
 
 DELETE FROM siri_vehicle_location WHERE siri_snapshot_id IN (SELECT id FROM repair_snapshot);
 

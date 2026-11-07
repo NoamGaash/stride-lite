@@ -145,13 +145,59 @@ not help:
 4. **It costs a 120 GiB rewrite** on a machine whose I/O throttle in `ingest/local.xml` exists
    because the first full load pinned the NVMe at 97.6% and made the machine unusable.
 
-The repair uses lightweight deletes instead. `siri_ride` and `siri_ride_stop` carry projections,
-which refuse a lightweight delete until the table says what to do about them — so
-`db/schema.sql` now sets `lightweight_mutation_projection_mode = 'rebuild'` on both. It is a
-MergeTree setting, so a `SETTINGS` clause on the `DELETE`, a session `SET` and a client flag are
-each accepted and then ignored; all three were tried. Rebuilding is affordable because the
-damage sits at the top of the id space: every row of the damaged band is in 7 parts totalling
-940 MiB, out of 61 GiB.
+The repair uses lightweight deletes on the fact table instead — and heavy ones everywhere a
+projection exists, for the reason below.
+
+## A lightweight delete corrupts a table with projections, and the setting that looks like the fix is not
+
+This cost a repair run and is the most expensive thing on this page, so it is worth stating
+exactly.
+
+`siri_ride` and `siri_ride_stop` carry projections (`db/projections.sql`). A lightweight delete
+refuses to touch a table with one until the table says what to do about them, and the available
+answer looks like `lightweight_mutation_projection_mode = 'rebuild'`. It is not an answer. On a
+2-million-row table with one projection, after `DELETE FROM t WHERE ride = 7` under `rebuild`:
+
+| Read path | Rows returned for `ride = 7` |
+| --- | --- |
+| base table (`optimize_use_projections = 0`) | 0 |
+| **through the projection (the default)** | **2,000** |
+| after `ALTER TABLE t DELETE WHERE ride = 8` | 0 both ways |
+
+The setting only *permits* the delete. It rebuilds nothing. (It is also a MergeTree setting, so a
+`SETTINGS` clause on the `DELETE`, a session `SET` and a client flag are each accepted and then
+silently ignored — all three were tried before the table setting was found.)
+
+**Two consequences, and the second is why a whole repair run had to be thrown away.**
+
+1. Any integrity query that filters on `siri_ride_id` reads `by_siri_ride` and therefore counts
+   rows that no longer exist. The natural-key duplicate count for 2026-08-01's rides read
+   **1,732,181 through the projection and 2,860 without it**. Every "duplicate" in the inflated
+   figure was the same id twice — a row that had been deleted, served from a stale projection.
+2. `enrich_ride_stop_src` dedups with
+   `NOT IN (SELECT ... FROM siri_ride_stop WHERE siri_ride_id IN ...)`, which is exactly the
+   lookup `by_siri_ride` exists to serve. So a stale projection makes the re-derivation *skip
+   stops it should have re-minted*, and the repair quietly produces less data than it deleted.
+   The run that was underway when this was found was deriving against phantom rows and was
+   killed.
+
+So:
+
+- `ingest/repair.sql` uses `ALTER TABLE ... DELETE` for `siri_ride` and `siri_ride_stop`. It is
+  affordable because the predicate is on the sort key and the damage is at the top of the id
+  space: 7 parts totalling 940 MiB out of 61 GiB.
+- `db/schema.sql` keeps the **default** `throw` on both tables, and that default is now
+  load-bearing rather than unexamined — it is what stops the next person from doing this.
+- `ingest/verify.sql` sets `optimize_use_projections = 0` on all four ride and ride-stop checks.
+  A gate must not depend on a projection being fresh.
+- If a lightweight delete has already happened, `ALTER TABLE ... APPLY DELETED MASK` rebuilds the
+  affected parts' projections. Measured on the real tables: 5 s for `siri_ride` (2 masked parts,
+  84 MiB) and 40 s for `siri_ride_stop` (2 parts, 460 MiB), after which the two read paths agreed
+  at 469,358 rows.
+
+`siri_vehicle_location` and `siri_ride_duration` carry no projections, so they keep lightweight
+deletes — and the fact table especially wants them, being 120 GiB in one partition where a heavy
+mutation would rewrite all of it.
 
 ## What a day of the archive costs Hasadna
 

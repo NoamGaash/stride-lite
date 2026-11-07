@@ -185,13 +185,12 @@ ENGINE = MergeTree
 ORDER BY siri_ride_id
 ;
 
--- `lightweight_mutation_projection_mode` is here because of ingest/repair.sql.
--- This table carries projections (db/projections.sql), and a lightweight delete
--- refuses to touch a table with one until the table itself says what should
--- happen to them — it is a MergeTree setting, so a SETTINGS clause on the
--- DELETE, a session `SET` and a client flag are each accepted and then ignored.
--- `rebuild` and not `drop` because the projections are what make the ingest's
--- lookups seeks rather than scans of billions of rows.
+-- This table keeps the DEFAULT lightweight_mutation_projection_mode, which is
+-- `throw`, and that default is load-bearing rather than unexamined: it is what
+-- stops a lightweight delete from silently corrupting the projections below.
+-- `rebuild` looks like the answer and is not — measured, it permits the delete
+-- and leaves the projection serving the deleted rows. ingest/repair.sql uses
+-- `ALTER TABLE ... DELETE` here for that reason, and explains it at length.
 CREATE TABLE stride.siri_ride
 (
     `id` Int32,
@@ -211,16 +210,15 @@ CREATE TABLE stride.siri_ride
 )
 ENGINE = MergeTree
 ORDER BY id
-SETTINGS index_granularity = 8192, lightweight_mutation_projection_mode = 'rebuild'
+SETTINGS index_granularity = 8192
 ;
 
--- `lightweight_mutation_projection_mode` is here because of ingest/repair.sql.
--- This table carries projections (db/projections.sql), and a lightweight delete
--- refuses to touch a table with one until the table itself says what should
--- happen to them — it is a MergeTree setting, so a SETTINGS clause on the
--- DELETE, a session `SET` and a client flag are each accepted and then ignored.
--- `rebuild` and not `drop` because the projections are what make the ingest's
--- lookups seeks rather than scans of billions of rows.
+-- This table keeps the DEFAULT lightweight_mutation_projection_mode, which is
+-- `throw`, and that default is load-bearing rather than unexamined: it is what
+-- stops a lightweight delete from silently corrupting the projections below.
+-- `rebuild` looks like the answer and is not — measured, it permits the delete
+-- and leaves the projection serving the deleted rows. ingest/repair.sql uses
+-- `ALTER TABLE ... DELETE` here for that reason, and explains it at length.
 CREATE TABLE stride.siri_ride_stop
 (
     `id` Int64,
@@ -232,7 +230,7 @@ CREATE TABLE stride.siri_ride_stop
 )
 ENGINE = MergeTree
 ORDER BY id
-SETTINGS index_granularity = 8192, lightweight_mutation_projection_mode = 'rebuild'
+SETTINGS index_granularity = 8192
 ;
 
 CREATE TABLE stride.siri_route
