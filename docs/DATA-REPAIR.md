@@ -219,6 +219,42 @@ So:
 deletes — and the fact table especially wants them, being 120 GiB in one partition where a heavy
 mutation would rewrite all of it.
 
+## Keeping the landing rows made every enrichment pass 25x more expensive
+
+This is the bill for the decision that makes a repair free, and it was not priced when the
+decision was made.
+
+`siri_feed` has no date filter — it is "everything in landing that is not yet enriched" — and the
+six `enrich_*_src` views reference it four times between them. While landing held one hour that
+cost nothing. Now that `DROP_LANDING=0` keeps whole months, landing is **150,966,451 rows and
+3.13 GiB**, and one pass reads it four times over:
+
+| | |
+| --- | --- |
+| rows read, one day's pass | 617,028,034 |
+| bytes read | 12.62 GiB |
+| ÷ landing rows | **4.1 scans** |
+
+At the 80 MiB/s read ceiling `ingest/local.xml` sets — which exists because the first full load
+pinned the NVMe at 97.6% — 12.62 GiB is **about 161 s of I/O before any join or sort work**. Two
+consequences:
+
+1. **A 23-day repair costs roughly three hours**, nearly all of it re-reading the same month. The
+   per-day loop pays those four scans 23 times, about 14 billion row reads for 209 million rows
+   of output.
+2. **`enrich_vehicle_location` refreshes every minute and one pass needs more than a minute of
+   I/O alone.** A refreshable view cannot overrun its interval — measured, ClickHouse serialises
+   it — so it does not corrupt anything, but the live chain is doing far more work per tick than
+   it was designed for, and it grows with every month of landing retained.
+
+Neither is fixed here, and the fix is not "drop the landing rows": that is the thing that makes a
+repair cost $0.00 instead of $0.022 a day. The fix is to stop reading the whole month. Two
+candidates, neither measured yet and so both **Hypothesis (unverified)**: give `siri_feed` a
+snapshot-prefix bound and have the one-off path pass the day it is deriving, which would turn
+each scan from 151M rows into about 5.8M; or batch the repair so a range pays the four scans once
+instead of once per day. The second is a smaller change and would cut the three hours to roughly
+eight minutes of scanning, at the cost of a larger sort.
+
 ## What a day of the archive costs Hasadna
 
 `s3://openbus-stride-public` is `NOSIGN`, so every byte we read is billed to Hasadna and not to
