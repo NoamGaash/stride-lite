@@ -296,6 +296,29 @@ With numbers, for the 162 days from 2026-05-30 to today, about 37.7 GB:
 | Finish the archive without a mirror | $1.51, once | $0 |
 | Re-derive a day we already hold | **$0.00** | $0 |
 
+### The whole archive, for completeness
+
+The figures above are for the 162 days we actually need. The whole SIRI archive, 2021/04 to
+2026/11, is **288,970,717,345 bytes — 269.1 GiB in 2,794,246 objects**. That number is **not
+mine**: it was measured by unsigned LIST by the agent that owns the deploy path, and I have not
+re-run it. What I can say is that my own two day-listings corroborate the per-day rate it
+implies, which is the part that matters here: 2026/07/27 at 227,633,001 bytes over 1,428 objects
+and 2026/09/15 at 238,374,201 over 1,426, against its spot-check of 2026-10-15 at 228.8 MiB. The
+brief I was given said to design against about 450 GiB; the archive is a little over half that,
+and every figure on this page uses the listing rather than the brief.
+
+Mirroring all of it would be:
+
+| | |
+| --- | --- |
+| our storage | **$6.65/month** (289.0 GB × $0.023) |
+| Hasadna's GETs, copied S3→S3 in region | $1.12 (2,794,246 × $0.0000004) |
+| Hasadna's egress, copied via our machine instead | $26.01 |
+| our PUTs | $13.97, once |
+
+That makes the recommendation below stronger rather than weaker: $6.65 a month, forever, to
+insure a loss measured at $0.92.
+
 **Recommendation: do not build it.** Four reasons, in order of weight.
 
 1. **The landing table already is the mirror, and it is cheaper and better shaped.**
