@@ -5,7 +5,7 @@ import { query, scalar, lit, ClickHouseError } from './ch'
 import { buildQuery, BadRequest, BadInput, TzRequired, UnknownOrderField } from './sql'
 import { endpoints, getEndpoints } from './registry'
 import { rawEndpoints, wrap, type RawEndpointDef } from './raw'
-import { statusSql } from './status'
+import { coverageSql, statusSql } from './status'
 
 const PORT = Number(process.env.PORT ?? 8080)
 const HOST = process.env.HOST ?? '0.0.0.0'
@@ -143,6 +143,17 @@ const server = createServer(async (req, res) => {
       return await send(200, row ?? {})
     }
 
+    // Also ours rather than upstream's, and public for the same reason: a
+    // reader who sees a flat line on a chart should be able to tell an outage
+    // from a quiet day without asking anyone.
+    if (url.pathname === '/coverage') {
+      const raw = url.searchParams.get('limit')
+      if (raw !== null && !/^\d{1,5}$/.test(raw)) throw new BadRequest('limit must be a number')
+      const limit = raw === null ? 90 : Number(raw)
+      if (limit < 1 || limit > 10000) throw new BadRequest('limit must be between 1 and 10000')
+      return await send(200, (await query(coverageSql(DB, limit))).map(normalize))
+    }
+
     const listDef = byPath.get(url.pathname)
     if (listDef) {
       const { sql, isCount } = buildQuery(listDef, url.searchParams)
@@ -163,9 +174,19 @@ const server = createServer(async (req, res) => {
     if (getDef) {
       const id = url.searchParams.get('id')
       if (id === null || !/^-?\d+$/.test(id)) throw new BadRequest('id is required')
-      const select = getDef.fields.map((f) => `\`${f}\``).join(', ')
+      const own = getDef.alias ? `${getDef.alias}.` : ''
+      const select = [
+        ...getDef.fields.map((f) => `${own}\`${f}\` AS \`${f}\``),
+        ...(getDef.related ?? []).flatMap((r) =>
+          r.fields.map((f) => `${r.alias}.\`${f}\` AS \`${f}\``),
+        ),
+      ].join(', ')
+      const from = [
+        `FROM ${getDef.table}${getDef.alias ? ` AS ${getDef.alias}` : ''}`,
+        ...(getDef.joins ?? []),
+      ].join(' ')
       const rows = await query(
-        `SELECT ${select} FROM ${getDef.table} WHERE id = ${lit(Number(id))} LIMIT 1 ${SETTINGS}`,
+        `SELECT ${select} ${from} WHERE ${own}id = ${lit(Number(id))} LIMIT 1 ${SETTINGS}`,
       )
       if (rows.length === 0) return await send(404, { detail: 'Not Found' })
       return await send(200, normalize(rows[0]))

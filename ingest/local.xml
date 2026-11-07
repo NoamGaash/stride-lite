@@ -23,7 +23,12 @@
     <tcp_port>__TCP_PORT__</tcp_port>
     <http_port>__HTTP_PORT__</http_port>
 
-    <max_server_memory_usage>4294967296</max_server_memory_usage>
+    <!-- 8 GiB because that is what t4g.large has, which infra/main.tf deploys.
+         A tighter local cap does not prove anything the target has to survive,
+         and it hid the opposite problem: at 4 GiB an enrichment INSERT and an
+         ad-hoc query could not coexist, so probing the data killed a backfill
+         mid-day. Reloadable without a restart. -->
+    <max_server_memory_usage>8589934592</max_server_memory_usage>
 
     <!-- ionice is ignored on the `none` I/O scheduler that NVMe usually has,
          and cgroup io.max needs root, so ClickHouse's own throttle is the only

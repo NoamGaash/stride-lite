@@ -220,7 +220,17 @@ const cases: Case[] = [
  * because a list that grows quietly is how a comparison like this stops meaning
  * anything.
  */
-const ALLOWED_DIFFS: { path: string; field: string; why: string }[] = [
+const ALLOWED_DIFFS: {
+  path: string
+  field: string
+  why: string
+  /**
+   * Drop the field only on rows where production has no value. Everything
+   * production does answer stays compared, which is the difference between an
+   * exception and a blind spot.
+   */
+  onlyWhereProductionIsNull?: boolean
+}[] = [
   {
     path: '/siri_velocity_aggregation/siri_velocity_aggregation',
     field: 'average_rolling_avg',
@@ -238,6 +248,29 @@ const ALLOWED_DIFFS: { path: string; field: string; why: string }[] = [
     field: 'stddev_rolling_avg',
     why: 'Same cause as average_rolling_avg above.',
   },
+  ...[
+    { path: '/siri_rides/list', prefix: '' },
+    { path: '/siri_rides/get', prefix: '' },
+    { path: '/siri_vehicle_locations/list', prefix: 'siri_ride__' },
+    { path: '/siri_ride_stops/list', prefix: 'siri_ride__' },
+  ].flatMap(({ path, prefix }) =>
+    ['duration_minutes', 'first_vehicle_location_id', 'last_vehicle_location_id'].map(
+      (field) => ({
+        path,
+        field: `${prefix}${field}`,
+        onlyWhereProductionIsNull: true,
+        why: 'Production stopped measuring ride durations in December 2024 — 7 rides of ' +
+      '3,086,370 that month, and none at all from 2025-01 on, which is why ' +
+      'docs/FINDINGS.md #13 exists. Every case here sits in 2025-01-01..2026-05-29, ' +
+      'so production answers null for all three and this implementation answers ' +
+      'what the locations say. Deliberate: the user ruled that fixing a production ' +
+      'defect justifies diverging from it. Verified against a day production did ' +
+      'measure, 2024-09-10, where the duration matches on 108,230 of 108,237 rides; ' +
+      'the two ids are not reproducible even in principle, because production picks ' +
+      'among readings sharing one recorded_at_time in scan order.',
+      }),
+    ),
+  ),
 ]
 
 /**
@@ -278,17 +311,28 @@ async function fetchJson(target: string): Promise<{ status: number; body: unknow
   return { status: res.status, body }
 }
 
-/** Drops fields that are allowed to differ, so everything else must match exactly. */
-function strip(path: string, value: unknown): unknown {
-  const fields = ALLOWED_DIFFS.filter((d) => d.path === path).map((d) => d.field)
-  if (fields.length === 0) return value
-  const clean = (row: unknown): unknown => {
+/**
+ * Drops fields that are allowed to differ, so everything else must match
+ * exactly. `production` is the other side, needed by the conditional entries;
+ * rows are paired by position, which is why no conditional entry is used on an
+ * endpoint marked `unordered`.
+ */
+function strip(path: string, value: unknown, production: unknown): unknown {
+  const diffs = ALLOWED_DIFFS.filter((d) => d.path === path)
+  if (diffs.length === 0) return value
+  const clean = (row: unknown, prodRow: unknown): unknown => {
     if (row === null || typeof row !== 'object') return row
     const out: Record<string, unknown> = { ...(row as Record<string, unknown>) }
-    for (const f of fields) delete out[f]
+    const theirs = (prodRow ?? {}) as Record<string, unknown>
+    for (const d of diffs) {
+      if (d.onlyWhereProductionIsNull && theirs[d.field] !== null) continue
+      delete out[d.field]
+    }
     return out
   }
-  return Array.isArray(value) ? value.map(clean) : clean(value)
+  if (!Array.isArray(value)) return clean(value, production)
+  const prodRows = Array.isArray(production) ? production : []
+  return value.map((row, i) => clean(row, prodRows[i]))
 }
 
 /** For an endpoint that emits no ORDER BY, compare the rows as a set. */
@@ -326,8 +370,8 @@ describe('responses match production', () => {
         }
         const [prod, local] = await Promise.all([fetchJson(url(PROD, c)), fetchJson(url(LOCAL, c))])
         expect(local.status, 'http status').toBe(prod.status)
-        const l = strip(c.path, local.body)
-        const p = strip(c.path, prod.body)
+        const l = strip(c.path, local.body, prod.body)
+        const p = strip(c.path, prod.body, prod.body)
         if (c.unordered) expect(canonical(l)).toStrictEqual(canonical(p))
         else expect(l).toStrictEqual(p)
       },

@@ -74,6 +74,10 @@ None of the following was requested. Each is a judgement call, and each could be
 | **Sequential surrogate ids**, taken from the dump and continued with `max(id) + row_number()` | It is what the dump holds, so historical responses compare byte for byte | Measured 2026-11-05: identity derived as a hash of the natural key answers the same query ~100x faster and would delete the 52% of the database that exists only to hold these keys. The id constraint permits a wider type, so nothing blocks it but the work — see [db-benchmark](https://github.com/NoamGaash/open-bus-map-search/tree/main/db-benchmark) |
 | **Precomputation only where a query cannot do the work** | `gtfs_rides_agg_by_hour` as a plain view exceeds a 4 GiB ceiling, and stored it costs 181 MiB — 0.07% of the database. The identity tables cost 52% and make queries slower | — |
 | **`t4g.large` + 350 GB gp3 in us-east-1** for the estimate | Cheapest that still holds 8 GiB, which is a floor and not a preference: an unfiltered `/siri_rides/list` was measured failing at a 4 GiB ceiling, and production answers that call. Burstable is free here at a duty cycle of a couple of percent | A 24-hour steady-state measurement, which has not been run |
+| **A fresh instance loads the whole history by itself**, as a `oneshot` unit rather than a command somebody remembers to run | A deploy that leaves an empty database is a deploy that does not work, and "run this afterwards" is a step that gets skipped. Five resumable stages, state on the data volume: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) §"What the first deploy leaves you with" | — |
+| **A restorable copy of the database in our own S3, at $5.86 a month**, preferred over rebuilding from public data | Reading `s3://openbus-stride-public` is billed to Hasadna, so "download once, ever" has to be a property of the design and not a habit. First instance rebuilds and publishes; every later one restores, in 35 minutes and for nothing | A cheaper storage class, or a project that would rather spend days of compute than $70 a year |
+| **us-east-1 stays, re-priced against the bulk load** | eu-west-1 would spend $120.72 a year of ours to save $3.75 of Hasadna's once and $1.32 a year after. Measured both ways from AWS's own price list on 2026-11-07 | A measurement of latency from Israel, which has never been taken |
+| **`api_domain` optional and off by default**, with the CloudFront name as the fallback | A name in `hasadna.org.il` needs a record in a Cloudflare zone this repository does not own, so it cannot be a precondition for deploying. But the frontend's CSP allows `*.hasadna.org.il` only, so the opt-in cannot be switched on without one | Someone adding the two DNS records, which is all it takes |
 
 ### What the agent actually did
 
@@ -100,6 +104,17 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
 - Read the upstream ETL rather than guessing at it, which is what settled the ride-identity
   and coordinate-dropping rules, and what turned up the findings in
   [docs/FINDINGS.md](docs/FINDINGS.md).
+- Wrote the first load, so a deployed node holds the whole history rather than whatever
+  arrived after it booted: `scripts/first-load.sh`, five resumable stages, started as a
+  systemd unit by `infra/bootstrap.sh`.
+- Measured the whole public SIRI archive without downloading any of it — 288,970,717,345
+  bytes in 2,794,246 objects, by unsigned `LIST` — and priced all three ways to fill a node
+  from AWS's own price list, in both regions, for both payers.
+- Found two things in the load path that would have failed on the first real run, by
+  reproducing both: `load-from-dump.sh` deadlocked forever on any table the dump has no
+  `COPY` block for, which is every table this project added; and `MATERIALIZE PROJECTION`
+  rewrites every part even when the projection is already complete, so every deploy rebuilt
+  74 GiB of projections.
 
 **Not done:**
 
@@ -109,21 +124,22 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
   enrichment together cost **14.7 s per hour of feed** — 9.8 s to pull the snapshots and 4.9 s
   to derive the typed rows — so a week of missed data takes about 41 minutes on six throttled
   cores. What is still unmeasured is RSS and CPU held over a full day of continuous running.
-- **Ride durations are not computed.** 0 of 220,518 rides since 2026-11-03 carry
-  `duration_minutes`, where production returns a number. The differential suite passed because
-  its cases sit inside the dump's window, where the value came from the dump. It is a one-pass
-  aggregation over each ride's own locations, measured at 0.087 s for a whole day, and it is a
-  field derived from ministry data, so it falls under byte-for-byte. Upstream
-  (`open-bus-stride-etl/siri/add_ride_durations.py`) is one `UPDATE` with window functions and
-  no heuristics, gated on three clock rules: a duration is written only once the ride's last
-  location is 6 hours old, a ride still without locations after 2 days is stamped `0` rather
-  than left null, and `updated_duration_minutes` records when the task ran — which is ETL
-  bookkeeping, and therefore ours.
+- **Ride durations are computed for the days this build has walked, not yet for all of
+  them.** The pass is in place — `siri_ride_duration`, filled by a parameterised view that
+  the hourly chain and the backfill both call — and the dump's own 56,363,296 measurements are
+  seeded into the same table, so there is one place to read from. What is left is running it
+  over the history day by day, at roughly 7 s a day over a 36-hour window of locations.
+  Verified against 2024-09-10, the last period production measured: the duration matches on
+  108,230 of 108,237 rides. The two location ids do not and cannot — production picks among
+  readings sharing one `recorded_at_time` in scan order, and no tie-break reproduces its
+  choice better than a coin flip (48% and 51%). `updated_duration_minutes` and
+  `updated_first_last_vehicle_locations` stay NULL: they record when an Airflow task ran, and
+  there is no task.
 - **Siri rides are not matched to GTFS rides.** `enrich_ride` writes NULL into all four
   `*_gtfs_ride_id` columns, so `/gtfs_rides_agg/group_by` returns `total_actual_rides = 0` for
   every day this build ingested, where production now returns a number. It is one gate behind
   ride durations — upstream's `siri/update_rides_gtfs.py` runs four `UPDATE`s, each gated on
-  `updated_duration_minutes is not null` — so the durations above have to land first. The
+  `updated_duration_minutes is not null` — and that gate is now open. The
   matching itself is three joins with a tolerance window, not a heuristic. See finding 13.
 - **The differential suite only compares a window that ended five months ago.** Every case
   sits inside 2025-01-01 to 2026-05-29, and neither bound is a choice about what to serve:
