@@ -15,7 +15,7 @@
 # 1,000,000-row part went from all_1_1_0 to all_1_1_0_2 on a second MATERIALIZE.
 # db/projections.sql ends with four of them, so applying that file as-is on every
 # deploy rebuilt 74 GiB of projections every time — tens of minutes each by the
-# file's own measurement, on a volume with 65 GiB spare. So the ADDs are applied
+# file's own measurement, on a volume with 61 GiB spare. So the ADDs are applied
 # from the file (metadata only, and IF NOT EXISTS) and the MATERIALIZEs are
 # issued here, only for a (table, projection) pair some active part is missing.
 set -euo pipefail
@@ -29,7 +29,7 @@ sed "s/^CREATE TABLE stride\./CREATE TABLE IF NOT EXISTS $CH_DB./" "$here/../db/
 $CH --database "$CH_DB" --multiquery < "$here/../db/raw.sql"
 CH_CLIENT="$CH" CH_DB="$CH_DB" "$here/migrate.sh"
 $CH --database "$CH_DB" --multiquery < "$here/../db/views.sql"
-grep -v '^ALTER TABLE .* MATERIALIZE PROJECTION' "$here/../db/projections.sql" \
+grep -v '^[[:space:]]*ALTER TABLE .* MATERIALIZE PROJECTION' "$here/../db/projections.sql" \
   | $CH --database "$CH_DB" --multiquery
 
 # system.parts.projections is the projections a part actually carries, so this
