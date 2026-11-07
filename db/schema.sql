@@ -169,6 +169,28 @@ ORDER BY id
 SETTINGS index_granularity = 8192
 ;
 
+-- Measured from the locations of a finished ride, by ingest/enrich.sql. Not a
+-- production table: there the same three values are columns of siri_ride, and
+-- an UPDATE is how they get there. ClickHouse has no equivalent -- a mutation
+-- cannot read a per-row value from another table -- so they are a table, and
+-- siri_ride's own copies are left to the dump that filled them.
+CREATE TABLE stride.siri_ride_duration
+(
+    `siri_ride_id` Int32,
+    `first_vehicle_location_id` Int64,
+    `last_vehicle_location_id` Int64,
+    `duration_minutes` Int32
+)
+ENGINE = MergeTree
+ORDER BY siri_ride_id
+;
+
+-- This table keeps the DEFAULT lightweight_mutation_projection_mode, which is
+-- `throw`, and that default is load-bearing rather than unexamined: it is what
+-- stops a lightweight delete from silently corrupting the projections below.
+-- `rebuild` looks like the answer and is not — measured, it permits the delete
+-- and leaves the projection serving the deleted rows. ingest/repair.sql uses
+-- `ALTER TABLE ... DELETE` here for that reason, and explains it at length.
 CREATE TABLE stride.siri_ride
 (
     `id` Int32,
@@ -191,6 +213,12 @@ ORDER BY id
 SETTINGS index_granularity = 8192
 ;
 
+-- This table keeps the DEFAULT lightweight_mutation_projection_mode, which is
+-- `throw`, and that default is load-bearing rather than unexamined: it is what
+-- stops a lightweight delete from silently corrupting the projections below.
+-- `rebuild` looks like the answer and is not — measured, it permits the delete
+-- and leaves the projection serving the deleted rows. ingest/repair.sql uses
+-- `ALTER TABLE ... DELETE` here for that reason, and explains it at length.
 CREATE TABLE stride.siri_ride_stop
 (
     `id` Int64,
@@ -268,3 +296,22 @@ ORDER BY (recorded_at_time, id)
 SETTINGS index_granularity = 8192
 ;
 
+
+CREATE TABLE stride.ingest_day_health
+(
+    `day` Date,
+    `snapshots` UInt32,
+    `snapshots_expected` UInt32,
+    `vehicle_locations` UInt64,
+    `duplicate_ids` UInt64,
+    `duplicate_readings` UInt64,
+    `rides` UInt64,
+    `rides_with_duration` UInt64,
+    `rides_linked_to_gtfs` UInt64,
+    `duplicate_ride_ids` UInt64,
+    `duplicate_ride_stop_keys` UInt64,
+    `measured_at` DateTime
+)
+ENGINE = ReplacingMergeTree(measured_at)
+ORDER BY day
+;

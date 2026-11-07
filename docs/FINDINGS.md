@@ -360,6 +360,64 @@ tail. That is the cost of working around it rather than fixing it at the source.
 
 ---
 
+## 15. A zero-minute ride is a parked bus with a stopped clock
+
+A ride whose `duration_minutes` is 0 looks like a ride that lasted less than a minute. It is
+not. It is a vehicle that was reported repeatedly, from the same place, with the same
+timestamp, for most of an hour.
+
+Measured on 2024-09-10, the last date whose durations production still has. That day holds
+3,207 rides with `duration_minutes = 0` and both location ids present — so rides production
+genuinely measured, not the ones its second pass gave up on. Taking the first 500 by id and
+reading every location they own:
+
+| | |
+| --- | --- |
+| Readings per ride | 23.5 on average |
+| Distinct snapshots those readings came from | 23.3 |
+| Archive wall-clock span of those snapshots | 41.5 min median, 35.7 mean, 83 max |
+| Rides whose readings fall inside one snapshot minute | 99 of 500 |
+| Rides that moved less than 100 m end to end | **493 of 500** |
+| Rides that moved more than 1 km | **1 of 500** |
+
+So the feed emitted roughly 23 records per ride across roughly 40 real minutes, and every one
+carried an identical `recorded_at_time` and an identical position. The duration is zero because
+the clock never advanced, and the distance is zero because the bus never moved.
+
+**The snapshot path is a second, independent clock, and that is what makes this provable.**
+`siri_snapshot.snapshot_id` is the archive path (`2024/09/10/05/31`), written by the collector
+when it fetched the feed. It cannot be a device's opinion about the time. Comparing the two
+clocks is what separates "a ride that was over quickly" from "a record that was repeated".
+
+**The same mechanism explains a tie this implementation could not reproduce.** At a ride's
+earliest `recorded_at_time` there are, on average, **18.33 readings sharing that one timestamp**,
+and in 2,272 of 2,294 sampled rides they come from more than one snapshot. Production stores a
+single `first_vehicle_location_id`, chosen by whichever row PostgreSQL's window function reached
+first. Over 290 tied rides with a production value, matched against every ordering available in
+the data:
+
+| Candidate rule | Rides matched |
+| --- | --- |
+| Lowest snapshot | 46 |
+| Highest snapshot | 66 |
+| Lowest id | 69 |
+| Highest id | 87 |
+
+None is the rule, and no combination is. The two id columns are not a function of the data, so
+they are not reproducible even in principle — which is why this implementation picks a
+deterministic tie-break of its own and treats the stored ids as internal.
+
+**Why it matters.** 3,207 of roughly 108,000 rides that day, about 3%, are rides whose vehicle
+is reported present and never moves. Anything counting executed rides counts them, and anything
+averaging ride duration averages a zero into it. `duration_minutes` is faithful to
+`recorded_at_time`, and `recorded_at_time` is not always a clock.
+
+Not attempted here: deriving duration from snapshot time instead, which would give these rides
+their real ~40 minutes of being reported. That is a change in what the column means, not a bug
+fix, and it belongs to whoever owns the definition.
+
+---
+
 ## Reporting these
 
 These are observations from outside, and some may have a reason we cannot see

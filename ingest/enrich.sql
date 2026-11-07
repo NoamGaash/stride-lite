@@ -292,6 +292,74 @@ FROM (
         ON rs.siri_ride_id = rd.id AND rs.siri_stop_id = s.id AND rs.`order` = v.stop_order
 ) AS fresh;
 
+-- The duration of a ride, and the locations at its two ends.
+--
+-- This is the one step that cannot read the landing table. A ride's duration is
+-- a property of all its locations, and those keep arriving for hours after the
+-- ride row exists, so the input is siri_vehicle_location and the question is
+-- which slice of 6.87 billion rows to read. That slice cannot be derived from
+-- the landing table either: during a backfill the landing holds both the day
+-- being loaded and the live hour, so its newest snapshot is `now` and says
+-- nothing about the day. So the window is a parameter, and the two callers
+-- differ only in what they pass.
+--
+-- The settling rule is upstream's, from add_ride_durations.py: a ride counts as
+-- finished when its last location is more than six hours old. What is NOT
+-- upstream's is its second pass, which writes duration_minutes = 0 for rides it
+-- gave up on — a measurement that was never measured. Here a ride with no
+-- settled locations keeps a NULL, which is what "we do not know" looks like.
+--
+-- `min(recorded_at_time) >= {from}` is the other half of the window: without it
+-- a ride that started before the window gets a duration measured from the
+-- window's edge, and the dedupe below then freezes that wrong answer forever.
+--
+-- The API joins this table directly rather than through a view over siri_ride.
+-- A view was the first shape tried and it is the wrong one: as a subquery it
+-- stops the endpoint's filter reaching the base table, and the same page that
+-- costs 0.653 s with the join written inline instead died on the 4 GiB ceiling
+-- in FillingRightJoinSide. db/migrations seeds the dump's own measurements into
+-- this table so there is one place to read from and no coalescing anywhere.
+--
+-- The table itself is in db/schema.sql, not here: migrations run before this
+-- file on every deploy, and the one that seeds it would find nothing to seed.
+-- Ties are the reason the extremes are argMin/argMax over (time, id) and not
+-- over time alone. A ride commonly has several readings sharing one
+-- recorded_at_time, and production picks among them in scan order: measured
+-- against a day in 2024-09, no tie-break reproduces its choice better than a
+-- coin flip (48% and 51% for the first id), while the duration itself matches
+-- 108,230 of 108,237 rides. So the duration is reproducible and these two ids
+-- are not; what the tuple buys is that OUR answer is stable.
+CREATE OR REPLACE VIEW enrich_duration_src AS
+WITH
+    rides AS (
+        SELECT
+            rs.siri_ride_id AS siri_ride_id,
+            vl.id AS id,
+            vl.recorded_at_time AS recorded_at_time
+        FROM siri_vehicle_location AS vl
+        INNER JOIN siri_ride_stop AS rs ON rs.id = vl.siri_ride_stop_id
+        WHERE vl.recorded_at_time >= {from:DateTime}
+          AND vl.recorded_at_time < {to:DateTime}
+    ),
+    -- Restricted to the batch for the reason rule 3 gives: unrestricted, this
+    -- becomes a set of every ride ever measured. siri_ride_duration is sorted
+    -- by siri_ride_id, so the restriction is a primary-key lookup.
+    done AS (
+        SELECT siri_ride_id
+        FROM siri_ride_duration
+        WHERE siri_ride_id IN (SELECT siri_ride_id FROM rides)
+    )
+SELECT
+    siri_ride_id,
+    argMin(id, (recorded_at_time, id)) AS first_vehicle_location_id,
+    argMax(id, (recorded_at_time, id)) AS last_vehicle_location_id,
+    toInt32(round((max(recorded_at_time) - min(recorded_at_time)) / 60)) AS duration_minutes
+FROM rides
+GROUP BY siri_ride_id
+HAVING max(recorded_at_time) < {settled_before:DateTime}
+   AND min(recorded_at_time) >= {from:DateTime}
+   AND siri_ride_id NOT IN done;
+
 -- The chain. DEPENDS ON is what orders it: a step refreshes only after the one
 -- it reads from has finished, so a ride never looks for a route that is not
 -- there yet. APPEND is load-bearing — without it a refreshable view REPLACES
@@ -321,3 +389,15 @@ APPEND TO siri_ride_stop AS SELECT * FROM enrich_ride_stop_src;
 CREATE OR REPLACE MATERIALIZED VIEW enrich_vehicle_location
 REFRESH EVERY 1 MINUTE DEPENDS ON enrich_ride_stop, enrich_snapshot
 APPEND TO siri_vehicle_location AS SELECT * FROM enrich_vehicle_location_src;
+
+-- Hourly, not every minute: nothing it can act on changes faster than that,
+-- because a ride has to be six hours quiet before it counts. The window is a
+-- day and a half so that a ride which settles just inside the six-hour bound is
+-- still wholly within it.
+CREATE OR REPLACE MATERIALIZED VIEW enrich_duration
+REFRESH EVERY 1 HOUR DEPENDS ON enrich_vehicle_location
+APPEND TO siri_ride_duration AS
+SELECT * FROM enrich_duration_src(
+    from = now() - INTERVAL 36 HOUR,
+    to = now(),
+    settled_before = now() - INTERVAL 6 HOUR);

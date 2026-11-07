@@ -203,6 +203,60 @@ a rewrite.
 
 ## Known gaps, stated rather than buried
 
+- **We duplicated twenty-nine days of our own data, and the gate we built could not see the
+  worst of it.** Full inventory, repair and cost in [docs/DATA-REPAIR.md](docs/DATA-REPAIR.md).
+  The enrichment mints `id` as `max(id) + row_number()`, which is only a key if one pass runs at
+  a time. The race has two failure modes and the first gate caught one: when both passes read
+  the same starting max, one id covers two rows; when they read *different* maxima, every id is
+  unique and the same reading is simply stored twice. `siri_ride_stop` turned out to be the
+  worst-damaged table at **9,161,623 duplicate ids and 1,287,638 duplicate natural keys**, and
+  it was the table the gate did not look at. `ingest/verify.sql` now gates ids *and* natural
+  keys on three tables plus a duplicate-reading ratio, `ingest/repair-range.sh` re-derives a
+  range from the landing table without touching S3, and `enrich-once.sql` refuses to run while
+  the chain is enabled — which is the hole that caused all of it.
+- **Two short days are the archive's own, not ours.** 2026-08-19 holds 455 of about 1,430
+  snapshots and 2026-08-20 holds 1,318 — and the bucket listing returns `KeyCount 455` for the
+  19th, so S3 holds 455 too. Neither is a failed download, which is why `snapshots_expected` on
+  `/coverage` is documented as a ceiling and not a floor. Friday and Saturday are legitimately a
+  half and a sixth of a weekday in *locations*; the snapshot count holds on Shabbat, because the
+  collector does not rest even when the buses do.
+- **September and October 2026 were never loaded**, and most of November is missing. Measured
+  against the bucket listing, finishing the archive is 63 days at 1,427 objects and 0.233 GB
+  each: **$1.36 of Hasadna's egress**, once. Re-fetching the six July days and 2026-06-15 that
+  no longer have landing rows is a further $0.15.
+- **The SIRI↔GTFS link is not implemented.** Not one of the roughly 13.4M rides we ingested
+  ourselves carries `scheduled_time_gtfs_ride_id`. The dump has it for 95% of 2024-08 and 50%
+  of 2024-09 before collapsing on the same decay as the durations. Durations are now computed,
+  which opens the `updated_duration_minutes is not null` gate upstream puts in front of it, but
+  the four `UPDATE`s themselves are still not reimplemented.
+- **`siri_vehicle_location` has no `PARTITION BY`, and on the evidence it should not.** This was
+  an open question and it is now a decision, argued with four measurements in
+  [docs/DATA-REPAIR.md](docs/DATA-REPAIR.md). Briefly: a repair's unit is the snapshot, not the
+  calendar day, and a snapshot's readings scatter up to 22.7 hours behind and (for 11,855 August
+  rows) years ahead, so a month partition would not contain a day's damage; finding the rows
+  derived from a month's snapshots already takes 2.7 s thanks to the existing `id` minmax index;
+  the ministry's future timestamps would mint about 140 junk partitions reaching to 2038; and
+  repartitioning means rewriting 120 GiB on a machine whose I/O throttle exists because the
+  first load made it unusable. Lightweight deletes do the job instead.
+- **Every enrichment pass re-reads the whole retained landing table, four times over.**
+  `siri_feed` is "everything in landing not yet enriched" with no date filter, and the six
+  `enrich_*_src` views reference it four times between them. That cost nothing while landing held
+  one hour; now that `DROP_LANDING=0` keeps whole months it holds 150,966,451 rows, and one pass
+  reads **617,028,034 rows and 12.62 GiB** — 4.1 scans. At the 80 MiB/s ceiling in
+  `ingest/local.xml` that is about 161 s of I/O before any join work, so a one-day pass measured
+  about 24 minutes. `ingest/repair-range.sh` works around it by batching, which makes a range pay
+  the scans once instead of once per day, but the underlying cost is still there and still grows
+  with every month retained — including for `enrich_vehicle_location`, which refreshes every
+  minute and needs more than a minute of I/O for a single pass. It corrupts nothing (a
+  refreshable view cannot overrun itself; measured) but it is doing far more work per tick than
+  it was designed for. The fix is to bound `siri_feed` by snapshot prefix, which would turn each
+  scan from 151M rows into about 5.8M. Not done, and not measured.
+- **The live feed is landing about two thirds of the archive.** Measured on 2026-11-07:
+  2026/11/05 holds 959 snapshots and 2026/11/06 holds 952, against the roughly 1,428 S3 has. The
+  cause is that every repair and backfill stops the live views for its duration, and the minutes
+  that pass meanwhile are lost. `ingest/catchup.sh` now resumes from the oldest incomplete day
+  within seven days instead of from the newest snapshot's day, which makes the hole reachable —
+  but nothing has yet run long enough to confirm it closes.
 - **PostgreSQL wins one query.** A selective `line_ref` + bounding-box filter is 0.017 s
   against 0.063–0.090 s, because B-tree indexes on `lon`/`lat` are the right tool. Closing it
   needs skip indexes. Not done.

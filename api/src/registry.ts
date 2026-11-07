@@ -10,6 +10,13 @@ const DB = process.env.CH_DB ?? 'stride'
  * a per-endpoint rule is easier to check against the upstream router than a
  * clever naming convention would be.
  */
+/** Where a ride's measured columns come from. See ingest/enrich.sql. */
+const MEASURED = [
+  'first_vehicle_location_id',
+  'last_vehicle_location_id',
+  'duration_minutes',
+]
+
 export const endpoints: EndpointDef[] = [
   {
     path: '/siri_routes/list',
@@ -140,6 +147,8 @@ export const endpoints: EndpointDef[] = [
       `INNER JOIN ${DB}.siri_ride AS r ON r.id = rs.siri_ride_id`,
       `INNER JOIN ${DB}.siri_route AS rt ON rt.id = r.siri_route_id`,
       `INNER JOIN ${DB}.siri_snapshot AS sn ON sn.id = vl.siri_snapshot_id`,
+      // Last, for the join-order reason given on /siri_rides/list.
+      `LEFT JOIN ${DB}.siri_ride_duration AS d ON d.siri_ride_id = r.id`,
     ],
     related: [
       { prefix: 'siri_snapshot__', alias: 'sn', fields: ['snapshot_id'] },
@@ -147,17 +156,9 @@ export const endpoints: EndpointDef[] = [
       {
         prefix: 'siri_ride__',
         alias: 'r',
-        fields: [
-          'id',
-          'journey_ref',
-          'scheduled_start_time',
-          'vehicle_ref',
-          'first_vehicle_location_id',
-          'last_vehicle_location_id',
-          'duration_minutes',
-          'gtfs_ride_id',
-        ],
+        fields: ['id', 'journey_ref', 'scheduled_start_time', 'vehicle_ref', 'gtfs_ride_id'],
       },
+      { prefix: 'siri_ride__', alias: 'd', fields: MEASURED },
     ],
     filters: [
       { param: 'siri_vehicle_location_ids', column: 'vl.id', type: 'in' },
@@ -214,10 +215,20 @@ export const endpoints: EndpointDef[] = [
     alias: 'r',
     // Only the first join is inner; a siri ride need not have been matched to a
     // GTFS ride, and the published schema marks every gtfs_* field nullable.
+    //
+    // siri_ride_duration carries what production keeps in siri_ride itself, for
+    // the reason ingest/enrich.sql gives. Joined here rather than behind a view
+    // over siri_ride: as a subquery the view stopped this filter from reaching
+    // the base table and took the page over the 4 GiB ceiling, while the join
+    // written here costs it nothing — 0.559 s without it, 0.530 s with.
     joins: [
       `INNER JOIN ${DB}.siri_route AS sr ON sr.id = r.siri_route_id`,
       `LEFT JOIN ${DB}.gtfs_ride AS gr ON gr.id = r.gtfs_ride_id`,
       `LEFT JOIN ${DB}.gtfs_route AS grt ON grt.id = gr.gtfs_route_id`,
+      // Last on purpose. ClickHouse joins in the order written, and this one
+      // placed before the gtfs joins took an hour's page from 0.530 s to
+      // 18.729 s — same rows, same columns, 35x the time.
+      `LEFT JOIN ${DB}.siri_ride_duration AS d ON d.siri_ride_id = r.id`,
     ],
     fields: [
       'id',
@@ -226,10 +237,7 @@ export const endpoints: EndpointDef[] = [
       'scheduled_start_time',
       'vehicle_ref',
       'updated_first_last_vehicle_locations',
-      'first_vehicle_location_id',
-      'last_vehicle_location_id',
       'updated_duration_minutes',
-      'duration_minutes',
       'journey_gtfs_ride_id',
       'route_gtfs_ride_id',
       'gtfs_ride_id',
@@ -237,6 +245,7 @@ export const endpoints: EndpointDef[] = [
     // `scheduled_time_gtfs_ride_id` is a column of the table but not of the
     // pydantic model, so it is absent from the response.
     related: [
+      { prefix: '', alias: 'd', fields: MEASURED },
       { prefix: 'siri_route__', alias: 'sr', fields: ['line_ref', 'operator_ref'] },
       {
         prefix: 'gtfs_ride__',
@@ -317,7 +326,7 @@ export const endpoints: EndpointDef[] = [
       journey_ref: 'r.journey_ref',
       scheduled_start_time: 'r.scheduled_start_time',
       vehicle_ref: 'r.vehicle_ref',
-      duration_minutes: 'r.duration_minutes',
+      duration_minutes: 'd.duration_minutes',
       gtfs_ride_id: 'r.gtfs_ride_id',
     },
   },
@@ -529,6 +538,10 @@ export const endpoints: EndpointDef[] = [
             )
           )
         )) AS grt ON grt.id = gr.gtfs_route_id`,
+      // Last, for the join-order reason given on /siri_rides/list.
+      `LEFT JOIN (SELECT * FROM ${DB}.siri_ride_duration WHERE siri_ride_id IN (
+          SELECT siri_ride_id FROM ${DB}.siri_ride_stop WHERE __BASE_WHERE__
+        )) AS d ON d.siri_ride_id = rs.siri_ride_id`,
     ],
     fields: [
       'id',
@@ -549,15 +562,13 @@ export const endpoints: EndpointDef[] = [
           'scheduled_start_time',
           'vehicle_ref',
           'updated_first_last_vehicle_locations',
-          'first_vehicle_location_id',
-          'last_vehicle_location_id',
           'updated_duration_minutes',
-          'duration_minutes',
           'journey_gtfs_ride_id',
           'route_gtfs_ride_id',
           'gtfs_ride_id',
         ],
       },
+      { prefix: 'siri_ride__', alias: 'd', fields: MEASURED },
       { prefix: 'gtfs_stop__', alias: 'gs', fields: ['date', 'code', 'lat', 'lon', 'name', 'city'] },
       {
         prefix: 'nearest_siri_vehicle_location__',
@@ -677,7 +688,19 @@ export const endpoints: EndpointDef[] = [
 ]
 
 /** `/<name>/get` endpoints: single row by id, same field list as the plain list. */
-export const getEndpoints: { path: string; table: string; fields: string[] }[] = [
+export const getEndpoints: {
+  path: string
+  table: string
+  fields: string[]
+  /**
+   * One row by id, so a join here is two primary-key lookups and needs none of
+   * the restriction the list endpoints build. `alias` is required with `joins`,
+   * because the columns then have to say which table they come from.
+   */
+  alias?: string
+  joins?: string[]
+  related?: { alias: string; fields: string[] }[]
+}[] = [
   { path: '/siri_routes/get', table: `${DB}.siri_route`, fields: ['id', 'line_ref', 'operator_ref'] },
   { path: '/siri_stops/get', table: `${DB}.siri_stop`, fields: ['id', 'code'] },
   {
@@ -741,6 +764,8 @@ export const getEndpoints: { path: string; table: string; fields: string[] }[] =
   {
     path: '/siri_rides/get',
     table: `${DB}.siri_ride`,
+    alias: 'r',
+    joins: [`LEFT JOIN ${DB}.siri_ride_duration AS d ON d.siri_ride_id = r.id`],
     fields: [
       'id',
       'siri_route_id',
@@ -748,14 +773,12 @@ export const getEndpoints: { path: string; table: string; fields: string[] }[] =
       'scheduled_start_time',
       'vehicle_ref',
       'updated_first_last_vehicle_locations',
-      'first_vehicle_location_id',
-      'last_vehicle_location_id',
       'updated_duration_minutes',
-      'duration_minutes',
       'journey_gtfs_ride_id',
       'route_gtfs_ride_id',
       'gtfs_ride_id',
     ],
+    related: [{ alias: 'd', fields: MEASURED }],
   },
   {
     // `order` is a reserved word, which is why every field here is quoted.
