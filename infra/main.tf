@@ -106,9 +106,14 @@ variable "region" {
 # and does not re-run bootstrap. Shrink only once first-load.sh reports done: a
 # stop mid-load kills it, and although the stage file in
 # /var/lib/clickhouse/first-load.state resumes it, the hours are spent.
+# c7g.4xlarge (16 vCPU, 32 GiB), not c7g.8xlarge (32 vCPU): the account's
+# On-Demand Standard vCPU quota is 16, and this is the first and only instance
+# this project creates, so there is nothing else to share it with. 16 vCPU
+# non-burstable is still far ahead of t4g.large for the reason above; it is a
+# quota fit, not a cost compromise.
 variable "instance_type" {
   type    = string
-  default = "c7g.8xlarge"
+  default = "c7g.4xlarge"
 }
 
 # 350 and not 400, and not 300. Measured on the local database 2026-11-07:
