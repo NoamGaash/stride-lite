@@ -74,6 +74,10 @@ None of the following was requested. Each is a judgement call, and each could be
 | **Sequential surrogate ids**, taken from the dump and continued with `max(id) + row_number()` | It is what the dump holds, so historical responses compare byte for byte | Measured 2026-11-05: identity derived as a hash of the natural key answers the same query ~100x faster and would delete the 52% of the database that exists only to hold these keys. The id constraint permits a wider type, so nothing blocks it but the work — see [db-benchmark](https://github.com/NoamGaash/open-bus-map-search/tree/main/db-benchmark) |
 | **Precomputation only where a query cannot do the work** | `gtfs_rides_agg_by_hour` as a plain view exceeds a 4 GiB ceiling, and stored it costs 181 MiB — 0.07% of the database. The identity tables cost 52% and make queries slower | — |
 | **`t4g.large` + 350 GB gp3 in us-east-1** for the estimate | Cheapest that still holds 8 GiB, which is a floor and not a preference: an unfiltered `/siri_rides/list` was measured failing at a 4 GiB ceiling, and production answers that call. Burstable is free here at a duty cycle of a couple of percent | A 24-hour steady-state measurement, which has not been run |
+| **A fresh instance loads the whole history by itself**, as a `oneshot` unit rather than a command somebody remembers to run | A deploy that leaves an empty database is a deploy that does not work, and "run this afterwards" is a step that gets skipped. Five resumable stages, state on the data volume: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) §"What the first deploy leaves you with" | — |
+| **A restorable copy of the database in our own S3, at $5.86 a month**, preferred over rebuilding from public data | Reading `s3://openbus-stride-public` is billed to Hasadna, so "download once, ever" has to be a property of the design and not a habit. First instance rebuilds and publishes; every later one restores, in 35 minutes and for nothing | A cheaper storage class, or a project that would rather spend days of compute than $70 a year |
+| **us-east-1 stays, re-priced against the bulk load** | eu-west-1 would spend $120.72 a year of ours to save $3.75 of Hasadna's once and $1.32 a year after. Measured both ways from AWS's own price list on 2026-11-07 | A measurement of latency from Israel, which has never been taken |
+| **`api_domain` optional and off by default**, with the CloudFront name as the fallback | A name in `hasadna.org.il` needs a record in a Cloudflare zone this repository does not own, so it cannot be a precondition for deploying. But the frontend's CSP allows `*.hasadna.org.il` only, so the opt-in cannot be switched on without one | Someone adding the two DNS records, which is all it takes |
 
 ### What the agent actually did
 
@@ -100,6 +104,17 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
 - Read the upstream ETL rather than guessing at it, which is what settled the ride-identity
   and coordinate-dropping rules, and what turned up the findings in
   [docs/FINDINGS.md](docs/FINDINGS.md).
+- Wrote the first load, so a deployed node holds the whole history rather than whatever
+  arrived after it booted: `scripts/first-load.sh`, five resumable stages, started as a
+  systemd unit by `infra/bootstrap.sh`.
+- Measured the whole public SIRI archive without downloading any of it — 288,970,717,345
+  bytes in 2,794,246 objects, by unsigned `LIST` — and priced all three ways to fill a node
+  from AWS's own price list, in both regions, for both payers.
+- Found two things in the load path that would have failed on the first real run, by
+  reproducing both: `load-from-dump.sh` deadlocked forever on any table the dump has no
+  `COPY` block for, which is every table this project added; and `MATERIALIZE PROJECTION`
+  rewrites every part even when the projection is already complete, so every deploy rebuilt
+  74 GiB of projections.
 
 **Not done:**
 

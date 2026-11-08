@@ -46,18 +46,15 @@ jobs:
         env:
           CH_CLIENT: ./clickhouse client
         run: ./scripts/apply-schema.sh
-      - name: Expect the 16 tables, siri_ride_duration, the aggregation table and its refresh, and the migration record
+      - name: Expect the 16 tables, siri_ride_duration, the landing table, the aggregation table and its refresh, and the migration record
         run: |
           n=$(./clickhouse client --query "SELECT count() FROM system.tables WHERE database='stride'")
-          test "$n" = 20 || { echo "got $n tables, want 20"; exit 1; }
+          test "$n" = 22 || { echo "got $n tables, want 22"; exit 1; }
 
       - name: Expect apply-schema to be idempotent
         run: ./scripts/apply-schema.sh
         env:
           CH_CLIENT: ./clickhouse client
-
-      - name: Apply the raw landing table
-        run: ./clickhouse client --database stride --multiquery < db/raw.sql
 
       - name: Apply the continuous ingest
         run: ./clickhouse client --database stride --multiquery < ingest/siri.sql
@@ -65,10 +62,18 @@ jobs:
       - name: Apply the enrichment
         run: ./clickhouse client --database stride --multiquery < ingest/enrich.sql
 
+      # ingest/enrich-once.sql ends by writing ingest_day_health from
+      # ingest_day_health_src, which this file creates, so the step below that
+      # runs enrich-once fails with UNKNOWN_FUNCTION without it. infra/bootstrap.sh
+      # installs it through scripts/first-load.sh and scripts/deploy.sh applies it
+      # on every deploy, so a CI that skips it is testing a chain nothing deploys.
+      - name: Apply the per-day health table and its refresh
+        run: ./clickhouse client --database stride --multiquery < ingest/health.sql
+
       - name: Expect the whole chain to be registered and healthy
         run: |
           n=$(./clickhouse client --query "SELECT count() FROM system.view_refreshes WHERE database='stride'")
-          test "$n" = 10 || { echo "got $n refreshable views, want 10"; exit 1; }
+          test "$n" = 11 || { echo "got $n refreshable views, want 11"; exit 1; }
           bad=$(./clickhouse client --query "SELECT count() FROM system.view_refreshes WHERE database='stride' AND exception != ''")
           test "$bad" = 0 || {
             ./clickhouse client --query "SELECT view, exception FROM system.view_refreshes WHERE exception != '' FORMAT Vertical"
@@ -78,16 +83,59 @@ jobs:
       - name: Apply the GTFS staging schema
         run: ./clickhouse client --database stride --multiquery < ingest/gtfs-staging.sql
 
-      - name: Apply the projections
-        # They are 30% of the footprint and the difference between 44 s and
-        # 0.016 s on two endpoints, so a projection that stops applying is a
-        # silent regression rather than an error.
-        run: ./clickhouse client --database stride --multiquery < db/projections.sql
-
+      # They are 30% of the footprint and the difference between 44 s and
+      # 0.016 s on two endpoints, so a projection that stops applying is a
+      # silent regression rather than an error. apply-schema.sh declares them;
+      # this is the assertion that it did.
       - name: Expect every projection to be registered
         run: |
           n=$(./clickhouse client --query "SELECT count() FROM system.projections WHERE database='stride'")
           test "$n" = 4 || { echo "got $n projections, want 4"; exit 1; }
+
+      # The expensive half of a projection is filling it, and MATERIALIZE
+      # rewrites every active part whether or not the projection is already
+      # complete — measured on 26.10. So apply-schema.sh issues MATERIALIZE
+      # only for a pair some part is missing, and on a database whose parts all
+      # carry their projections it must issue none. Asserted because the failure
+      # is invisible: a deploy that silently rebuilds 74 GiB still succeeds.
+      - name: Expect no projection to be re-materialised once it is complete
+        run: |
+          ./clickhouse client --query "
+            INSERT INTO stride.gtfs_ride_stop (id, gtfs_ride_id)
+            SELECT number, number FROM numbers(100000)"
+          ./scripts/apply-schema.sh
+          n=$(./clickhouse client --query "
+            SELECT count() FROM system.mutations
+            WHERE database = 'stride' AND command LIKE '%MATERIALIZE PROJECTION%'")
+          test "$n" = 0 || {
+            ./clickhouse client --query "
+              SELECT table, command FROM system.mutations WHERE database = 'stride' FORMAT Vertical"
+            echo "apply-schema re-materialised $n projection(s) that were already complete"
+            exit 1
+          }
+          ./clickhouse client --query "TRUNCATE TABLE stride.gtfs_ride_stop"
+        env:
+          CH_CLIENT: ./clickhouse client
+
+      # The guard that keeps a first load from emptying a database somebody
+      # else's data is in. It is the one failure mode of scripts/first-load.sh
+      # that destroys rather than delays.
+      - name: Expect first-load to refuse a database it has no record of loading
+        run: |
+          # siri_snapshot_id is not optional here even though the column is
+          # Nullable: siri_snapshot_enriched_mv reads it as Int32.
+          ./clickhouse client --query "
+            INSERT INTO stride.siri_vehicle_location (id, siri_snapshot_id, recorded_at_time)
+            SELECT 1, 1, now()"
+          if FIRST_LOAD_STATE=$PWD/first-load.state \
+             FIRST_LOAD_LOCK=$PWD/first-load.lock \
+             ./scripts/first-load.sh; then
+            echo "first-load.sh ran against a populated database with no state file"
+            exit 1
+          fi
+          ./clickhouse client --query "TRUNCATE TABLE stride.siri_vehicle_location"
+        env:
+          CH_CLIENT: ./clickhouse client
 
       # The ingest views refresh a minute after they are created and then every
       # minute, and they really do fetch from S3, so by this point the landing

@@ -47,12 +47,14 @@ else
 fi
 
 say "schema"
+# Tables, migrations, views and projections. db/raw.sql is in there too, which
+# is why it is not applied separately here any more.
 CH_CLIENT="$CH" CH_DB="$CH_DB" ./scripts/apply-schema.sh
-$CH --database "$CH_DB" --multiquery < db/raw.sql
 
 say "ingest and enrichment"
 $CH --database "$CH_DB" --multiquery < ingest/siri.sql
 $CH --database "$CH_DB" --multiquery < ingest/enrich.sql
+$CH --database "$CH_DB" --multiquery < ingest/health.sql
 echo "refreshable views created; they schedule themselves from here"
 
 say "GTFS, yesterday's feed"
