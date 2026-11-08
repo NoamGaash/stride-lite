@@ -28,7 +28,7 @@ grep -q "^LABEL=stride-data" /etc/fstab || echo "LABEL=stride-data $DATA ext4 de
 mount -a
 
 # ---- packages --------------------------------------------------------------
-dnf install -y git tar zstd unzip cronie
+dnf install -y git tar zstd unzip cronie mawk
 systemctl enable --now crond
 curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
 dnf install -y nodejs
