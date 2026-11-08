@@ -87,9 +87,28 @@ variable "region" {
 # failing at a 4 GiB ceiling with MEMORY_LIMIT_EXCEEDED — production answers that
 # call, so a 4 GiB box would turn a slower endpoint into a 500 and break the one
 # acceptance criterion this project has.
+# TEMPORARY, for the first load only, and the next commit on main should put
+# `t4g.large` back.
+#
+# t4g.large is the size this project is costed and argued on, and it is the right
+# size to *serve* from. It is the wrong size to build from once: it is burstable,
+# 2 vCPU against a 30% baseline, and the first load saturates CPU for hours
+# — zstd-decompressing a 155 GB dump, inserting it, backfilling 163 days of
+# archive, then materialising four projections. That exhausts the CPU credits and
+# then runs at 30% of two cores, which turns a job measured at 14 h on six
+# throttled cores into days. It does not fail; it crawls, which is worse, because
+# nothing reports it.
+#
+# c7g.8xlarge is ~$0.97/hour, about $700 a month if it is left here. The budget
+# alarm at $150 fires after the fact, not before. Terraform changes this in place
+# — stop, modify, start — and the data lives on a separate EBS volume with
+# user_data_replace_on_change = false, so shrinking it later keeps the database
+# and does not re-run bootstrap. Shrink only once first-load.sh reports done: a
+# stop mid-load kills it, and although the stage file in
+# /var/lib/clickhouse/first-load.state resumes it, the hours are spent.
 variable "instance_type" {
   type    = string
-  default = "t4g.large"
+  default = "c7g.8xlarge"
 }
 
 # 350 and not 400, and not 300. Measured on the local database 2026-11-07:
