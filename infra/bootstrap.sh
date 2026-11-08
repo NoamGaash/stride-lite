@@ -35,6 +35,16 @@ dnf install -y nodejs
 
 curl -fsSL https://clickhouse.com/ | sh
 mv ./clickhouse /usr/local/bin/clickhouse
+
+# The release binary is a decompressor stub wrapped around a compressed ELF: the
+# first run extracts the real binary in place next to itself, guarded by a lock
+# file in the same directory. Done here, as root, that write lands in
+# /usr/local/bin, which root owns. Left for later, it is done by the systemd
+# unit's `User=clickhouse` instead, which cannot write there and fails with
+# "Decompressing the binary... lock open: Permission denied" before the server
+# ever starts — the failure this comment exists because of.
+/usr/local/bin/clickhouse --version >/dev/null
+
 useradd -r -s /sbin/nologin clickhouse || true
 chown -R clickhouse:clickhouse "$DATA"
 
