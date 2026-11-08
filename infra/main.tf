@@ -111,6 +111,15 @@ variable "region" {
 # this project creates, so there is nothing else to share it with. 16 vCPU
 # non-burstable is still far ahead of t4g.large for the reason above; it is a
 # quota fit, not a cost compromise.
+# The data volume already exists in this AZ; pinning the instance to the same
+# one is what makes aws_ebs_volume.data's own AZ reference a plan-time literal
+# instead of a value that depends on the instance existing. See the comment on
+# aws_instance.app.
+variable "availability_zone" {
+  type    = string
+  default = "us-east-1a"
+}
+
 variable "instance_type" {
   type    = string
   default = "c7g.4xlarge"
@@ -375,9 +384,19 @@ resource "aws_iam_instance_profile" "instance" {
   role = aws_iam_role.instance.name
 }
 
+# Pinned, not left for AWS to pick at launch: aws_ebs_volume.data below reads
+# this instance's AZ, and while the instance exists that is a known value, but
+# while it does not (replacement, or a manual terminate) it is "known after
+# apply" — which does not match the volume's actual, already-fixed AZ, and
+# Terraform plans to replace the volume to chase it. That plan is what
+# aws_ebs_volume.data's own prevent_destroy caught, rather than the volume
+# itself being destroyed. Pinning this makes the reference a literal at plan
+# time regardless of whether the instance currently exists, so recreating the
+# instance can never again threaten the volume's config.
 resource "aws_instance" "app" {
   ami                  = data.aws_ami.al2023_arm.id
   instance_type        = var.instance_type
+  availability_zone    = var.availability_zone
   iam_instance_profile = aws_iam_instance_profile.instance.name
   security_groups      = [aws_security_group.api.name]
 
