@@ -31,6 +31,23 @@ jobs:
       - run: npm run typecheck
       - run: npx vitest run tests/sql.test.ts
 
+  load-from-dump:
+    # The first load streams for hours, and its failures are timeouts that a
+    # sample dump loaded in a second never reaches. This one is slowed down and
+    # run as a user whose server-side timeouts are seconds.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start ClickHouse
+        run: |
+          curl -s https://clickhouse.com/ | sh
+          ./clickhouse server --daemon
+          for _ in $(seq 30); do ./clickhouse client --query 'SELECT 1' && break; sleep 2; done
+      - name: Load a slow dump
+        env:
+          CH_CLIENT: ./clickhouse client
+        run: tests/load-from-dump.sh
+
   schema:
     # The schema has to apply to a clean ClickHouse, which is cheap to prove and
     # the thing most likely to rot silently as the DDL is edited.

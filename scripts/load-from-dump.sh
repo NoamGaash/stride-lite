@@ -44,7 +44,10 @@ tables=$($CH --query "SELECT name FROM system.tables
 # makes a retry mean what it says.
 # max_table_size_to_drop: ClickHouse refuses TRUNCATE above 50 GB by default,
 # which siri_vehicle_location always is after a partial attempt.
+# schema_migrations is not dump data: it records the ALTERs this schema has
+# had, and emptying it would make the next deploy replay them.
 for t in $tables; do
+  [ "$t" = schema_migrations ] && continue
   $CH --query "TRUNCATE TABLE $CH_DB.\`$t\` SETTINGS max_table_size_to_drop = 0"
 done
 

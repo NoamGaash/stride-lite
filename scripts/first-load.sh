@@ -192,6 +192,12 @@ load_history() {
     echo "no copy of ours to restore; rebuilding from the public dump"
     echo "this reads 154,630,881,726 bytes out of Hasadna's bucket, once"
     CH_DB="$CH_DB" CH_CLIENT="$CH" ./scripts/load-from-dump.sh "$DUMP_URL"
+    # bootstrap.sh applied the migrations before this load, over empty tables,
+    # so a data migration (001 seeds siri_ride_duration from siri_ride) wrote
+    # nothing and is recorded as done. Each is re-runnable by the rule in
+    # db/migrations/README.md, so they are replayed over the loaded data.
+    ch --query "TRUNCATE TABLE schema_migrations"
+    CH_DB="$CH_DB" CH_CLIENT="$CH" ./scripts/migrate.sh
     mark source dump
   fi
   resume_chain
