@@ -90,7 +90,7 @@ case $SRC in
   http://*|https://*) curl -sSfL "$SRC" ;;
   -)                  cat ;;
   *)                  cat -- "$SRC" ;;
-esac | zstd -dc | mawk -f "$(dirname "$0")/split-tables.awk"
+esac | zstd -dc | "$(command -v mawk || command -v awk)" -f "$(dirname "$0")/split-tables.awk"
 
 for fd in "${holders[@]}"; do eval "exec $fd>&-"; done
 for p in "${pids[@]}"; do wait "$p"; done
