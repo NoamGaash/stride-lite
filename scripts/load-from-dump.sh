@@ -42,7 +42,11 @@ tables=$($CH --query "SELECT name FROM system.tables
 # retry, not later: the disk was carrying duplicate history before the
 # attempt doing the filling had written a byte of its own. Truncating first
 # makes a retry mean what it says.
-for t in $tables; do $CH --query "TRUNCATE TABLE $CH_DB.\`$t\`"; done
+# max_table_size_to_drop: ClickHouse refuses TRUNCATE above 50 GB by default,
+# which siri_vehicle_location always is after a partial attempt.
+for t in $tables; do
+  $CH --query "TRUNCATE TABLE $CH_DB.\`$t\` SETTINGS max_table_size_to_drop = 0"
+done
 
 # Exit code 108 is NO_DATA_TO_INSERT, which here means the dump carries no COPY
 # block for this table. That is the normal case for every table this project
@@ -51,7 +55,11 @@ for t in $tables; do $CH --query "TRUNCATE TABLE $CH_DB.\`$t\`"; done
 # is, and its stderr is kept rather than discarded with it.
 insert_one() {
   local t=$1 cols=$2 rc=0
-  $CH --date_time_input_format=best_effort \
+  # receive_timeout: the holder fds below keep every FIFO open until the whole
+  # dump has streamed, so a small table's insert sits idle for hours waiting
+  # for EOF. The server's default 300 s kills it.
+  $CH --receive_timeout=172800 \
+      --date_time_input_format=best_effort \
       --format_tsv_null_representation='\N' \
       --max_insert_block_size=1048576 \
       --query "INSERT INTO $CH_DB.\`$t\` ($cols) FORMAT TSV" \

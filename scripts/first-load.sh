@@ -113,7 +113,7 @@ clear_for_retry() {
   for t in $(ch --query "SELECT name FROM system.tables
                          WHERE database = '$CH_DB' AND engine LIKE '%MergeTree%'
                            AND name != 'schema_migrations' FORMAT TSV"); do
-    ch --query "TRUNCATE TABLE \`$t\`"
+    ch --query "TRUNCATE TABLE \`$t\` SETTINGS max_table_size_to_drop = 0"
   done
 }
 
