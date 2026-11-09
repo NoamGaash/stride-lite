@@ -107,7 +107,7 @@ for _ in $(seq 1 60); do clickhouse client --query 'SELECT 1' >/dev/null 2>&1 &&
 # own ids and the chain mints ids as max(id) + row_number(). Both writing at
 # once hands one id to two different readings, which is the failure that cost
 # this project twenty-nine days of data.
-CH_CLIENT="clickhouse client" CH_DB=stride ./scripts/apply-schema.sh
+PROJECTIONS=0 CH_CLIENT="clickhouse client" CH_DB=stride ./scripts/apply-schema.sh
 
 cat > /etc/systemd/system/stride-api.service <<'SVC'
 [Unit]
