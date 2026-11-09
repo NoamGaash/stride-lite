@@ -33,6 +33,17 @@ tables=$($CH --query "SELECT name FROM system.tables
                       ORDER BY name FORMAT TSV")
 [ -n "$tables" ] || { echo "no tables in $CH_DB — apply db/schema.sql first" >&2; exit 1; }
 
+# Truncated first, every run: this is re-run by systemd's Restart=on-failure
+# on exactly the failure this script is prone to (the server closing a
+# connection mid-stream), and an INSERT after a partial previous attempt does
+# not replace those rows -- MergeTree keeps whatever already landed, so a
+# retry piled a second copy of however much got through on top of the first.
+# That surfaced as the data volume filling up earlier on each successive
+# retry, not later: the disk was carrying duplicate history before the
+# attempt doing the filling had written a byte of its own. Truncating first
+# makes a retry mean what it says.
+for t in $tables; do $CH --query "TRUNCATE TABLE $CH_DB.\`$t\`"; done
+
 # Exit code 108 is NO_DATA_TO_INSERT, which here means the dump carries no COPY
 # block for this table. That is the normal case for every table this project
 # added beyond the 16 the dump holds — the landing table, siri_ride_duration,
