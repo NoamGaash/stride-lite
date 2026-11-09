@@ -116,6 +116,7 @@ After=clickhouse.service
 [Service]
 WorkingDirectory=/opt/stride-lite/api
 Environment=CH_DB=stride
+Environment=CH_URL=http://127.0.0.1:8123
 Environment=PORT=80
 Environment=NODE_ENV=production
 ExecStart=/usr/bin/npx tsx src/server.ts
