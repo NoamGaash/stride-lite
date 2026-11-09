@@ -101,23 +101,7 @@ CREATE TABLE stride.gtfs_ride_stop
     `shape_dist_traveled` Nullable(Int32),
     `arrival_time` Nullable(DateTime),
     `departure_time` Nullable(DateTime),
-    INDEX idx_tight gtfs_ride_id TYPE bloom_filter(0.0001) GRANULARITY 1,
-    PROJECTION by_ride
-    (
-        SELECT
-            id,
-            gtfs_stop_id,
-            gtfs_ride_id,
-            stop_sequence,
-            pickup_type,
-            drop_off_type,
-            shape_dist_traveled,
-            arrival_time,
-            departure_time
-        ORDER BY
-            gtfs_ride_id,
-            gtfs_stop_id
-    )
+    INDEX idx_tight gtfs_ride_id TYPE bloom_filter(0.0001) GRANULARITY 1
 )
 ENGINE = MergeTree
 ORDER BY id

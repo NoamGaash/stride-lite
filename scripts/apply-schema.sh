@@ -29,30 +29,37 @@ sed "s/^CREATE TABLE stride\./CREATE TABLE IF NOT EXISTS $CH_DB./" "$here/../db/
 $CH --database "$CH_DB" --multiquery < "$here/../db/raw.sql"
 CH_CLIENT="$CH" CH_DB="$CH_DB" "$here/migrate.sh"
 $CH --database "$CH_DB" --multiquery < "$here/../db/views.sql"
-grep -v '^[[:space:]]*ALTER TABLE .* MATERIALIZE PROJECTION' "$here/../db/projections.sql" \
-  | $CH --database "$CH_DB" --multiquery
+# PROJECTIONS=0 skips all of it. bootstrap.sh passes that because a projection
+# declared before the first load is built during the insert, over parts not yet
+# merged: on the 344 GB node, gtfs_ride_stop alone reached ~95 GB of data plus
+# ~50 GB of projection mid-insert and the volume filled. deploy.sh runs this
+# with the default once first-load.sh releases the lock, and builds them then.
+if [ "${PROJECTIONS:-1}" = 1 ]; then
+  grep -v '^[[:space:]]*ALTER TABLE .* MATERIALIZE PROJECTION' "$here/../db/projections.sql" \
+    | $CH --database "$CH_DB" --multiquery
 
-# system.parts.projections is the projections a part actually carries, so this
-# asks the data rather than a bookkeeping table: a projection declared but never
-# filled, and one filled before a later part arrived, both show up here.
-pending=$($CH --database "$CH_DB" --query "
-  SELECT DISTINCT pr.table, pr.name
-  FROM system.projections AS pr
-  INNER JOIN system.parts AS p ON p.database = pr.database AND p.table = pr.table
-  WHERE pr.database = '$CH_DB' AND p.active AND NOT has(p.projections, pr.name)
-  ORDER BY pr.table, pr.name FORMAT TSV")
+  # system.parts.projections is the projections a part actually carries, so this
+  # asks the data rather than a bookkeeping table: a projection declared but never
+  # filled, and one filled before a later part arrived, both show up here.
+  pending=$($CH --database "$CH_DB" --query "
+    SELECT DISTINCT pr.table, pr.name
+    FROM system.projections AS pr
+    INNER JOIN system.parts AS p ON p.database = pr.database AND p.table = pr.table
+    WHERE pr.database = '$CH_DB' AND p.active AND NOT has(p.projections, pr.name)
+    ORDER BY pr.table, pr.name FORMAT TSV")
 
-if [ -z "$pending" ]; then
-  echo "projections: all materialised"
-else
-  # Asynchronous on purpose: these are mutations measured in tens of minutes
-  # each, and the API serves correct answers from the base tables while they
-  # run — slower on the endpoints the projection is for, and only those.
-  # system.mutations is where the progress is.
-  while IFS=$'\t' read -r table projection; do
-    echo "projections: materialising $table.$projection"
-    $CH --database "$CH_DB" --query "ALTER TABLE \`$table\` MATERIALIZE PROJECTION \`$projection\`"
-  done <<< "$pending"
+  if [ -z "$pending" ]; then
+    echo "projections: all materialised"
+  else
+    # Asynchronous on purpose: these are mutations measured in tens of minutes
+    # each, and the API serves correct answers from the base tables while they
+    # run — slower on the endpoints the projection is for, and only those.
+    # system.mutations is where the progress is.
+    while IFS=$'\t' read -r table projection; do
+      echo "projections: materialising $table.$projection"
+      $CH --database "$CH_DB" --query "ALTER TABLE \`$table\` MATERIALIZE PROJECTION \`$projection\`"
+    done <<< "$pending"
+  fi
 fi
 
 $CH --query "SELECT count() AS tables FROM system.tables WHERE database='$CH_DB'"
