@@ -54,16 +54,27 @@ done
 # ingest_day_health, schema_migrations — so it is not a failure. Anything else
 # is, and its stderr is kept rather than discarded with it.
 insert_one() {
-  local t=$1 cols=$2 rc=0
-  # receive_timeout: the holder fds below keep every FIFO open until the whole
-  # dump has streamed, so a small table's insert sits idle for hours waiting
-  # for EOF. The server's default 300 s kills it.
-  $CH --receive_timeout=172800 \
-      --date_time_input_format=best_effort \
-      --format_tsv_null_representation='\N' \
-      --max_insert_block_size=1048576 \
-      --query "INSERT INTO $CH_DB.\`$t\` ($cols) FORMAT TSV" \
-      < "$FIFO_DIR/$t" 2> "$WORK/$t.err" || rc=$?
+  local t=$1 cols=$2 rc=0 first
+  # Two timeouts, one per side of a table's data:
+  # - before it: the client connects at once but sends nothing until stdin has
+  #   data, and the server drops a connection idle for idle_connection_timeout
+  #   (3600 s). Tables late in the dump wait longer than that, so the client is
+  #   started only once the first line arrives.
+  # - after it: the holder fds below keep every FIFO open until the whole dump
+  #   has streamed, so an early table waits hours for EOF. receive_timeout
+  #   (300 s by default) would kill it.
+  # No first line means no COPY block for this table, which is not a failure:
+  # see NO_DATA_TO_INSERT above.
+  {
+    IFS= read -r first || return 0
+    { printf '%s\n' "$first"; cat; } \
+      | $CH --receive_timeout=172800 \
+            --date_time_input_format=best_effort \
+            --format_tsv_null_representation='\N' \
+            --max_insert_block_size=1048576 \
+            --query "INSERT INTO $CH_DB.\`$t\` ($cols) FORMAT TSV" \
+            2> "$WORK/$t.err" || rc=$?
+  } < "$FIFO_DIR/$t"
   [ "$rc" -eq 108 ] && return 0
   [ "$rc" -eq 0 ] || cat "$WORK/$t.err" >&2
   return "$rc"
