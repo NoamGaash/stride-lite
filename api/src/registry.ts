@@ -57,6 +57,15 @@ export const endpoints: EndpointDef[] = [
   },
   {
     path: '/gtfs_routes/list',
+    textOrder: [
+      'route_short_name',
+      'route_long_name',
+      'route_mkt',
+      'route_direction',
+      'route_alternative',
+      'agency_name',
+      'route_type',
+    ],
     model: 'GtfsRoute',
     table: `${DB}.gtfs_route`,
     alias: 'r',
@@ -96,7 +105,7 @@ export const endpoints: EndpointDef[] = [
   },
   {
     path: '/siri_snapshots/list',
-    textOrder: ['snapshot_id'],
+    textOrder: ['snapshot_id', 'etl_status', 'error', 'created_by'],
     model: 'SiriSnapshot',
     table: `${DB}.siri_snapshot`,
     alias: 'sn',
