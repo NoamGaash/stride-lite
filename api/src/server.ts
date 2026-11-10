@@ -1,4 +1,5 @@
 import { createServer } from 'node:http'
+import { availableParallelism } from 'node:os'
 import { gzip } from 'node:zlib'
 import { promisify } from 'node:util'
 import { query, scalar, lit, ClickHouseError } from './ch'
@@ -185,7 +186,9 @@ const server = createServer(async (req, res) => {
         for (const [name, sql] of Object.entries(metricsSql(DB))) {
           try {
             const rows = (await query(sql)).map((r) => redactRow(normalize(r)))
-            out[name] = name === 'server' ? rows[0] : rows
+            // The API shares the node with ClickHouse, so its core count is the one
+            // a load average is measured against.
+            out[name] = name === 'server' ? { ...rows[0], cpus: availableParallelism() } : rows
           } catch (err) {
             if (!(err instanceof ClickHouseError)) throw err
             console.error(`ops/metrics: ${name} failed:`, err.message)

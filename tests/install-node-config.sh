@@ -16,6 +16,17 @@ chmod +x "$ROOT/systemctl"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 
 for f in infra/node/systemd/*.service; do grep -q '^ExecStart=' "$f" || fail "$f has no ExecStart"; done
+
+# The status page serves these logs, and a line with no time on it cannot say
+# whether it is from this hour or from last week.
+for f in infra/node/cron/*; do
+  grep -E '^[@0-9*].*/var/log/' "$f" | grep -qv stamp-lines && fail "$f logs without timestamps"
+done
+grep -q '^ExecStart=.*stamp-lines' infra/node/systemd/stride-first-load.service \
+  || fail "the first load logs without timestamps"
+got=$(printf 'one\ntwo' | scripts/stamp-lines.sh)
+echo "$got" | grep -qxE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z two' \
+  || fail "stamp-lines dropped or did not stamp an unterminated last line: '$got'"
 for f in infra/node/cron/*; do grep -qE '^[@0-9*]' "$f" || fail "$f has no schedule"; done
 # cron runs its commands with PATH=/usr/bin:/bin, and the ClickHouse client
 # lives wherever clickhouse.service starts the server from.

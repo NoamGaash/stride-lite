@@ -9,5 +9,5 @@
 MAILTO=""
 # cron's own PATH is /usr/bin:/bin, and clickhouse is in /usr/local/bin.
 PATH=/usr/local/bin:/usr/bin:/bin
-@reboot root sleep 120; flock -n /var/lock/stride-catchup -c 'cd /opt/stride-lite && CH_DB=stride CH_CLIENT="clickhouse client" ./ingest/catchup.sh' >> /var/log/stride-catchup.log 2>&1
-17 * * * * root flock -n /var/lock/stride-catchup -c 'cd /opt/stride-lite && CH_DB=stride CH_CLIENT="clickhouse client" ./ingest/catchup.sh' >> /var/log/stride-catchup.log 2>&1
+@reboot root sleep 120; flock -n /var/lock/stride-catchup -c 'cd /opt/stride-lite && CH_DB=stride CH_CLIENT="clickhouse client" ./ingest/catchup.sh' 2>&1 | /opt/stride-lite/scripts/stamp-lines.sh >> /var/log/stride-catchup.log
+17 * * * * root flock -n /var/lock/stride-catchup -c 'cd /opt/stride-lite && CH_DB=stride CH_CLIENT="clickhouse client" ./ingest/catchup.sh' 2>&1 | /opt/stride-lite/scripts/stamp-lines.sh >> /var/log/stride-catchup.log
