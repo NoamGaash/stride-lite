@@ -187,7 +187,7 @@ export const rawEndpoints: RawEndpointDef[] = [
           expr = `agg.${field}`
         } else if (field === 'day_of_week') {
           // Upstream: trim(lower(to_char(agg.gtfs_route_hour, 'DAY'))).
-          expr = `lower(formatDateTime(agg.gtfs_route_hour, '%A'))`
+          expr = `lower(dateName('weekday', agg.gtfs_route_hour))`
         } else {
           expr = `rt.${field}`
           if (field === 'line_ref') {
@@ -199,6 +199,8 @@ export const rawEndpoints: RawEndpointDef[] = [
         select.push(`${expr} AS ${field}`)
         groupBy.push(expr)
       }
+      // Upstream's SQL has no ORDER BY; Postgres groups by sorting, so clients
+      // have always received the rows in group order.
       const jsonWrap = select.some((s) => s.endsWith('AS route_short_name_inner'))
       const outer = jsonWrap
         ? `SELECT * EXCEPT (route_short_name_inner, route_long_name_inner),
@@ -214,7 +216,8 @@ export const rawEndpoints: RawEndpointDef[] = [
             sum(agg.num_actual_rides) AS total_actual_rides
         FROM ${db}.gtfs_rides_agg_by_hour AS agg, ${db}.gtfs_route AS rt
         WHERE ${aggWhere(p)}
-        GROUP BY ${groupBy.join(', ')})`
+        GROUP BY ${groupBy.join(', ')})
+        ORDER BY ${fields.join(', ')}`
     },
   },
   {
