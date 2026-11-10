@@ -205,6 +205,7 @@ jobs:
       - run: terraform fmt -check -recursive
       - run: terraform init -backend=false
       - run: terraform validate
+      - run: terraform test
       # terraform validate does not look at the IAM policy, and IAM accepts an
       # action name it does not define, so a typo there is a permission that is
       # silently missing until an apply fails on it.

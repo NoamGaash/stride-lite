@@ -417,6 +417,15 @@ resource "aws_instance" "app" {
   })
   user_data_replace_on_change = false
 
+  # data.aws_ami picks the newest Amazon Linux image, so without this every
+  # deploy after an AMI release terminates the node and boots a fresh one: the
+  # database survives on its own volume, but anything on the root disk does
+  # not, and the deploy runs against a node still in cloud-init. Moving to a
+  # new AMI is a deliberate `terraform apply -replace=aws_instance.app`.
+  lifecycle {
+    ignore_changes = [ami]
+  }
+
   tags = {
     Name    = "stride-lite"
     Project = "stride-lite"
