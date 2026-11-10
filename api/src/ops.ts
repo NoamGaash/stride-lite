@@ -138,6 +138,26 @@ export function metricsSql(db: string): Record<string, string> {
     tables: `SELECT table, sum(rows) AS rows, sum(bytes_on_disk) AS bytes_on_disk, count() AS parts
       FROM system.parts WHERE database = '${db}' AND active
       GROUP BY table ORDER BY bytes_on_disk DESC`,
+    projections: `SELECT table, name AS projection, sum(rows) AS rows,
+        sum(bytes_on_disk) AS bytes_on_disk
+      FROM system.projection_parts WHERE database = '${db}' AND active
+      GROUP BY table, name ORDER BY bytes_on_disk DESC`,
+    // Disk that holds no served row: parts replaced by a merge or mutation and
+    // not yet removed, parts ClickHouse set aside, and other databases.
+    storage_not_served: `SELECT kind, table, parts, bytes_on_disk FROM (
+        SELECT 'inactive' AS kind, table, count() AS parts, sum(bytes_on_disk) AS bytes_on_disk
+          FROM system.parts WHERE database = '${db}' AND NOT active GROUP BY table
+        UNION ALL
+        SELECT 'detached', table, count(), sum(bytes_on_disk)
+          FROM system.detached_parts WHERE database = '${db}' GROUP BY table
+        UNION ALL
+        SELECT 'other database', database, count(), sum(bytes_on_disk)
+          FROM system.parts WHERE database != '${db}' GROUP BY database)
+      ORDER BY bytes_on_disk DESC LIMIT 50`,
+    columns: `SELECT table, name AS column, type, compression_codec,
+        data_compressed_bytes, data_uncompressed_bytes
+      FROM system.columns WHERE database = '${db}'
+      ORDER BY data_compressed_bytes DESC LIMIT 30`,
     // A projection being built is a mutation with parts_to_do counting down,
     // and its running work shows under merges.
     mutations: `SELECT table, substring(command, 1, 500) AS command, create_time, parts_to_do,
