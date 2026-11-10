@@ -13,6 +13,7 @@
 # needs no credentials. One day is a 149 MB zip holding a 596 MB stop_times.txt;
 # both are removed when the load finishes.
 set -euo pipefail
+self="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 cd "$(dirname "$0")/.."
 
 CH_DB=${CH_DB:-stride}
@@ -80,6 +81,6 @@ for ago in 2 1 0; do
   # failed download would go on to truncate the staging tables and derive from
   # nothing.
   # shellcheck disable=SC2046
-  "$0" $(date -u -d "$date_iso" +'%Y %m %d') || { echo "== $date_iso failed" >&2; failed=1; }
+  "$self" $(date -u -d "$date_iso" +'%Y %m %d') || { echo "== $date_iso failed" >&2; failed=1; }
 done
 exit "$failed"
