@@ -6,6 +6,7 @@ import { buildQuery, BadRequest, BadInput, TzRequired, UnknownOrderField } from 
 import { endpoints, getEndpoints } from './registry'
 import { rawEndpoints, wrap, type RawEndpointDef } from './raw'
 import { coverageSql, statusSql } from './status'
+import { memo, metricsSql, parseLogsQuery, readLogs, redactRow, RequestStats, UnknownSource } from './ops'
 
 const PORT = Number(process.env.PORT ?? 8080)
 const HOST = process.env.HOST ?? '0.0.0.0'
@@ -14,6 +15,20 @@ const byPath = new Map(endpoints.map((e) => [e.path, e]))
 const getByPath = new Map(getEndpoints.map((e) => [e.path, e]))
 const rawByPath = new Map(rawEndpoints.map((e) => [e.path, e]))
 const DB = process.env.CH_DB ?? 'stride'
+const OPS_TTL_SECONDS = 15
+const opsCache = memo<unknown>(OPS_TTL_SECONDS * 1000)
+const requests = new RequestStats(
+  new Set([
+    ...byPath.keys(),
+    ...getByPath.keys(),
+    ...rawByPath.keys(),
+    '/healthz',
+    '/status',
+    '/coverage',
+    '/ops/logs',
+    '/ops/metrics',
+  ]),
+)
 
 /**
  * Applies the response model's own coercions. A field declared `datetime.date`
@@ -103,6 +118,8 @@ const PREFLIGHT_HEADERS: Record<string, string> = {
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
   const wantsGzip = /\bgzip\b/.test(req.headers['accept-encoding'] ?? '')
+  const started = performance.now()
+  res.on('finish', () => requests.record(url.pathname, res.statusCode, performance.now() - started))
 
   if (
     req.method === 'OPTIONS' &&
@@ -117,13 +134,14 @@ const server = createServer(async (req, res) => {
     return res.end('OK')
   }
 
-  const send = async (status: number, body: unknown) => {
+  const send = async (status: number, body: unknown, extra: Record<string, string> = {}) => {
     const text = typeof body === 'string' ? body : JSON.stringify(body)
     const raw = Buffer.from(text, 'utf-8')
     const headers: Record<string, string> = {
       'Content-Type': 'application/json; charset=utf-8',
       'Access-Control-Allow-Origin': '*',
       Vary: 'Accept-Encoding',
+      ...extra,
     }
     const payload =
       wantsGzip && raw.length >= MIN_GZIP_BYTES ? await gzipAsync(raw) : raw
@@ -152,6 +170,32 @@ const server = createServer(async (req, res) => {
       const limit = raw === null ? 90 : Number(raw)
       if (limit < 1 || limit > 10000) throw new BadRequest('limit must be between 1 and 10000')
       return await send(200, (await query(coverageSql(DB, limit))).map(normalize))
+    }
+
+    // Public on purpose; see src/ops.ts for why nothing here can carry a
+    // visitor's address.
+    if (url.pathname === '/ops/logs') {
+      const { sources, lines } = parseLogsQuery(url.searchParams)
+      const body = await opsCache(`logs ${sources} ${lines}`, () => readLogs(sources, lines))
+      return await send(200, body, { 'Cache-Control': `max-age=${OPS_TTL_SECONDS}` })
+    }
+    if (url.pathname === '/ops/metrics') {
+      const body = await opsCache('metrics', async () => {
+        const out: Record<string, unknown> = { measured_at: new Date().toISOString() }
+        for (const [name, sql] of Object.entries(metricsSql(DB))) {
+          try {
+            const rows = (await query(sql)).map((r) => redactRow(normalize(r)))
+            out[name] = name === 'server' ? rows[0] : rows
+          } catch (err) {
+            if (!(err instanceof ClickHouseError)) throw err
+            console.error(`ops/metrics: ${name} failed:`, err.message)
+            out[name] = { error: 'query failed' }
+          }
+        }
+        out.api_requests_last_hour = requests.lastHour()
+        return out
+      })
+      return await send(200, body, { 'Cache-Control': `max-age=${OPS_TTL_SECONDS}` })
     }
 
     const listDef = byPath.get(url.pathname)
@@ -195,6 +239,7 @@ const server = createServer(async (req, res) => {
     return await send(404, { detail: 'Not Found' })
   } catch (err) {
     if (err instanceof BadInput) return await send(400, { detail: err.message })
+    if (err instanceof UnknownSource) return await send(422, { detail: err.message })
     if (err instanceof BadRequest) return await send(422, { detail: err.message })
     if (err instanceof TzRequired || err instanceof UnknownOrderField)
       return await send(500, { message: err.message })
