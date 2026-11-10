@@ -1,0 +1,4 @@
+# ClickHouse reads S3 itself for SIRI, but it cannot open a multi-file zip, so
+# the daily GTFS feed is one cron entry.
+MAILTO=""
+20 4 * * * root cd /opt/stride-lite && CH_DB=stride CH_CLIENT="clickhouse client" ./ingest/gtfs.sh >> /var/log/stride-gtfs.log 2>&1

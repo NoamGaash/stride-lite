@@ -21,6 +21,7 @@ git fetch --depth 1 origin "$BRANCH"
 git reset --hard FETCH_HEAD
 
 (cd api && npm ci --omit=dev)
+RESTART_CHANGED=1 ./scripts/install-node-config.sh
 
 # Everything past this point writes to the database, and scripts/first-load.sh
 # and ingest/catchup.sh take this same lock. Ten minutes is long enough for a

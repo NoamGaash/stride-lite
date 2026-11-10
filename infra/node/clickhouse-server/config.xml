@@ -1,0 +1,11 @@
+<clickhouse>
+    <path>/var/lib/clickhouse/</path>
+    <tmp_path>/var/lib/clickhouse/tmp/</tmp_path>
+    <user_files_path>/var/lib/clickhouse/user_files/</user_files_path>
+    <listen_host>127.0.0.1</listen_host>
+    <tcp_port>9000</tcp_port>
+    <http_port>8123</http_port>
+    <logger><level>warning</level><log>/var/log/clickhouse-server/clickhouse.log</log></logger>
+    <users_config>users.xml</users_config>
+    <default_profile>default</default_profile>
+</clickhouse>

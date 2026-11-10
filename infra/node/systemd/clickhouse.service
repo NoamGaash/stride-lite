@@ -1,0 +1,11 @@
+[Unit]
+Description=ClickHouse
+After=network.target
+[Service]
+User=clickhouse
+Group=clickhouse
+ExecStart=/usr/local/bin/clickhouse server --config-file=/etc/clickhouse-server/config.xml
+Restart=always
+LimitNOFILE=500000
+[Install]
+WantedBy=multi-user.target

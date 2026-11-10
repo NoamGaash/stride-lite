@@ -212,6 +212,9 @@ jobs:
       - name: Expect every IAM action in the deployer policy to exist
         working-directory: .
         run: python3 scripts/check-iam-actions.py infra/deployer-policy.json infra/github-oidc-trust.json
+      - name: Node config follows the repository on every deploy
+        working-directory: .
+        run: tests/install-node-config.sh
 
   differential:
     # Compares endpoints against the live production API, which is a non-profit's

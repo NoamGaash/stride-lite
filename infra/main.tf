@@ -417,13 +417,16 @@ resource "aws_instance" "app" {
   })
   user_data_replace_on_change = false
 
-  # data.aws_ami picks the newest Amazon Linux image, so without this every
-  # deploy after an AMI release terminates the node and boots a fresh one: the
-  # database survives on its own volume, but anything on the root disk does
-  # not, and the deploy runs against a node still in cloud-init. Moving to a
-  # new AMI is a deliberate `terraform apply -replace=aws_instance.app`.
+  # Neither a new image nor a new bootstrap.sh reaches a running node through
+  # Terraform. data.aws_ami picks the newest Amazon Linux, so without `ami` here
+  # every deploy after an AMI release terminates the node and boots a fresh one,
+  # against which the deploy then runs mid-cloud-init. And cloud-init runs
+  # user_data once per instance, so applying a changed `user_data` only stops and
+  # starts the node for nothing. Node config reaches existing nodes through
+  # scripts/install-node-config.sh on every deploy; a new image or bootstrap is a
+  # deliberate `terraform apply -replace=aws_instance.app`, which uses both.
   lifecycle {
-    ignore_changes = [ami]
+    ignore_changes = [ami, user_data]
   }
 
   tags = {

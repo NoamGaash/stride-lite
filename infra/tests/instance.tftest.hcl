@@ -30,3 +30,18 @@ run "after_a_new_ami_is_released" {
     error_message = "a newer AMI would replace the instance"
   }
 }
+
+run "after_bootstrap_changes" {
+  command = plan
+  override_data {
+    target = data.aws_ami.al2023_arm
+    values = { id = "ami-00000000000000001" }
+  }
+  variables {
+    branch = "some-other-branch"
+  }
+  assert {
+    condition     = !strcontains(aws_instance.app.user_data, "some-other-branch")
+    error_message = "a change to bootstrap.sh would stop and start the running instance"
+  }
+}
