@@ -2,14 +2,22 @@
 # Load the GTFS feed for a day.
 #
 #   ./ingest/gtfs.sh 2026 11 03   # that day
-#   ./ingest/gtfs.sh              # every day after the newest loaded, up to today
+#   ./ingest/gtfs.sh              # every day with SIRI and no GTFS, and today
 #
-# The archive publishes a day's feed at about 00:01 UTC that same day, so a
-# morning run can load today, as production serves it. Starting from the newest
-# day loaded, as ingest/catchup.sh does for SIRI, means a failed run or two weeks
-# switched off both heal on the next run. It stops at the first day that fails
-# rather than skipping it, so a gap is retried instead of left behind a newer
-# day; the archive has every day of 2026, so a permanent hole is not expected.
+# The question is not "what comes after the newest day" but "which days have
+# rides and no schedule". The first load brought SIRI up to date from the
+# archive and GTFS only for its last day, which left five months of rides with
+# no GTFS behind a newest day that looked current; walking forward from it never
+# looks back. So the days are read off siri_snapshot_seen instead.
+#
+# The archive publishes a day's feed at about 00:01 UTC that same day, so today
+# is included even before its SIRI lands. A day the archive does not have is
+# asked about with HEAD, which downloads nothing, and skipped; any other failure
+# stops the run, so a gap is retried on the next run rather than left behind.
+#
+# MAX_DAYS bounds one run, because each day is a 149 MB download from Hasadna's
+# bucket and minutes of CPU: a long gap heals over a few daily runs, or in one
+# with MAX_DAYS raised by hand.
 #
 # The archive is public and in the same region as everything else, so this
 # needs no credentials. One day is a 149 MB zip holding a 596 MB stop_times.txt;
@@ -20,6 +28,8 @@ cd "$(dirname "$0")/.."
 
 CH_DB=${CH_DB:-stride}
 CH=${CH_CLIENT:-clickhouse client}
+MAX_DAYS=${MAX_DAYS:-40}
+ARCHIVE=https://openbus-stride-public.s3.eu-west-1.amazonaws.com/gtfs_archive
 
 load_day() {
   local year=$1 month=$2 day=$3
@@ -30,7 +40,7 @@ load_day() {
 
   echo "== downloading $date_iso"
   curl -sS --fail -o "$workdir/feed.zip" \
-    "https://openbus-stride-public.s3.eu-west-1.amazonaws.com/gtfs_archive/$year/$month/$day/israel-public-transportation.zip"
+    "$ARCHIVE/$year/$month/$day/israel-public-transportation.zip"
 
   echo "== extracting"
   # Only the six the loader reads; shapes.txt alone is another 228 MB.
@@ -71,20 +81,29 @@ if [ $# -ge 3 ]; then
   exit
 fi
 
-newest=$($CH --database "$CH_DB" --query "SELECT ifNull(toString(max(date)), '') FROM gtfs_route" </dev/null)
-if [ -n "$newest" ]; then
-  day=$(date -u -d "$newest + 1 day" +%F)
-else
-  day=$(date -u +%F)
-fi
-today=$(date -u +%F)
-[ "$day" \> "$today" ] && echo "== up to date: $newest"
+missing=$($CH --database "$CH_DB" --query "
+  SELECT toString(d) FROM (
+    SELECT DISTINCT toDate(replaceAll(substring(siri_snapshot_id, 1, 10), '/', '-')) AS d
+    FROM siri_snapshot_seen
+    UNION DISTINCT SELECT today())
+  WHERE d NOT IN (SELECT DISTINCT assumeNotNull(date) FROM gtfs_route WHERE date IS NOT NULL)
+  ORDER BY d
+  FORMAT TSV" </dev/null)
+[ -n "$missing" ] || { echo "== up to date"; exit 0; }
+echo "== $(echo "$missing" | wc -l) days with no GTFS, loading at most $MAX_DAYS"
 
-while ! [ "$day" \> "$today" ]; do
+loaded=0
+for day in $missing; do
+  [ "$loaded" -lt "$MAX_DAYS" ] || { echo "== reached MAX_DAYS=$MAX_DAYS, the rest is for the next run"; break; }
+  path=$(date -u -d "$day" +%Y/%m/%d)
+  if ! curl -sSfI -o /dev/null "$ARCHIVE/$path/israel-public-transportation.zip"; then
+    echo "== $day is not in the archive, skipping"
+    continue
+  fi
   # A fresh shell and not a subshell: inside `|| ...` bash ignores set -e, and a
   # failed download would go on to truncate the staging tables and derive from
   # nothing.
   # shellcheck disable=SC2046
   "$self" $(date -u -d "$day" +'%Y %m %d') || { echo "== $day failed, stopping here" >&2; exit 1; }
-  day=$(date -u -d "$day + 1 day" +%F)
+  loaded=$((loaded + 1))
 done
