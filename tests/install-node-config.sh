@@ -17,6 +17,13 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 
 for f in infra/node/systemd/*.service; do grep -q '^ExecStart=' "$f" || fail "$f has no ExecStart"; done
 for f in infra/node/cron/*; do grep -qE '^[@0-9*]' "$f" || fail "$f has no schedule"; done
+# cron runs its commands with PATH=/usr/bin:/bin, and the ClickHouse client
+# lives wherever clickhouse.service starts the server from.
+ch_dir=$(dirname "$(sed -n 's/^ExecStart=\([^ ]*\).*/\1/p' infra/node/systemd/clickhouse.service)")
+for f in infra/node/cron/*; do
+  path=$(sed -n 's/^PATH=//p' "$f")
+  case ":$path:" in *":$ch_dir:"*) ;; *) fail "$f runs \`clickhouse\` without $ch_dir on its PATH ('${path:-cron default}')" ;; esac
+done
 run() { : > "$CALLS"; NODE_ROOT=$ROOT SYSTEMCTL=$ROOT/systemctl RESTART_CHANGED=1 ./scripts/install-node-config.sh >/dev/null; }
 
 mkdir -p "$ROOT/etc/systemd/system" "$ROOT/etc/clickhouse-server" "$ROOT/etc/cron.d"
