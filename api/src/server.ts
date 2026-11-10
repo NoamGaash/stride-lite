@@ -7,7 +7,16 @@ import { buildQuery, BadRequest, BadInput, TzRequired, UnknownOrderField } from 
 import { endpoints, getEndpoints } from './registry'
 import { rawEndpoints, wrap, type RawEndpointDef } from './raw'
 import { coverageSql, statusSql } from './status'
-import { memo, metricsSql, parseLogsQuery, readLogs, redactRow, RequestStats, UnknownSource } from './ops'
+import {
+  memo,
+  metricsSql,
+  parseLogsQuery,
+  parseRequestsQuery,
+  readLogs,
+  redactRow,
+  RequestStats,
+  UnknownSource,
+} from './ops'
 
 const PORT = Number(process.env.PORT ?? 8080)
 const HOST = process.env.HOST ?? '0.0.0.0'
@@ -28,6 +37,7 @@ const requests = new RequestStats(
     '/coverage',
     '/ops/logs',
     '/ops/metrics',
+    '/ops/requests',
   ]),
 )
 
@@ -179,6 +189,10 @@ const server = createServer(async (req, res) => {
       const { sources, lines } = parseLogsQuery(url.searchParams)
       const body = await opsCache(`logs ${sources} ${lines}`, () => readLogs(sources, lines))
       return await send(200, body, { 'Cache-Control': `max-age=${OPS_TTL_SECONDS}` })
+    }
+    if (url.pathname === '/ops/requests') {
+      const window = parseRequestsQuery(url.searchParams)
+      return await send(200, requests.summary(window), { 'Cache-Control': `max-age=${OPS_TTL_SECONDS}` })
     }
     if (url.pathname === '/ops/metrics') {
       const body = await opsCache('metrics', async () => {

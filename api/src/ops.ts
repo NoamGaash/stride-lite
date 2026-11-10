@@ -52,6 +52,12 @@ export function redact(text: string): string {
 
 export class UnknownSource extends Error {}
 
+export function parseRequestsQuery(params: URLSearchParams): Window {
+  const window = params.get('window') ?? 'hour'
+  if (!(window in WINDOWS)) throw new UnknownSource(`window must be one of: ${Object.keys(WINDOWS).join(', ')}`)
+  return window as Window
+}
+
 export function parseLogsQuery(params: URLSearchParams): { sources: string[]; lines: number } {
   const source = params.get('source')
   if (source !== null && !(source in LOG_SOURCES)) {
@@ -118,7 +124,13 @@ export async function readLogs(
 }
 
 /** Columns whose text comes from outside our own SQL, and so goes through redact. */
-export const FREE_TEXT = new Set(['exception', 'last_error_message', 'latest_fail_reason', 'command'])
+export const FREE_TEXT = new Set([
+  'exception',
+  'last_error_message',
+  'latest_fail_reason',
+  'command',
+  'query_shape',
+])
 
 /**
  * One query per section, so a section a ClickHouse version lacks fails alone.
@@ -154,10 +166,40 @@ export function metricsSql(db: string): Record<string, string> {
         SELECT 'other database', database, count(), sum(bytes_on_disk)
           FROM system.parts WHERE database != '${db}' GROUP BY database)
       ORDER BY bytes_on_disk DESC LIMIT 50`,
+    // bytes_on_disk of a part includes its projections, which projection_parts
+    // counts again, so the parts' own share is what is left after them.
+    storage_by_table: `SELECT p.table AS table, p.rows AS rows, p.parts AS parts,
+        p.bytes_on_disk AS bytes_on_disk, p.columns_bytes AS columns_bytes,
+        p.columns_uncompressed_bytes AS columns_uncompressed_bytes,
+        p.primary_key_bytes AS primary_key_bytes, p.marks_bytes AS marks_bytes,
+        p.skip_index_bytes AS skip_index_bytes, ifNull(j.projection_bytes, 0) AS projection_bytes
+      FROM (
+        SELECT table, sum(rows) AS rows, count() AS parts, sum(bytes_on_disk) AS bytes_on_disk,
+          sum(data_compressed_bytes) AS columns_bytes,
+          sum(data_uncompressed_bytes) AS columns_uncompressed_bytes,
+          sum(primary_key_size) AS primary_key_bytes, sum(marks_bytes) AS marks_bytes,
+          sum(secondary_indices_compressed_bytes + secondary_indices_marks_bytes) AS skip_index_bytes
+        FROM system.parts WHERE database = '${db}' AND active GROUP BY table) AS p
+      LEFT JOIN (
+        SELECT table, sum(bytes_on_disk) AS projection_bytes
+        FROM system.projection_parts WHERE database = '${db}' AND active GROUP BY table) AS j
+      ON p.table = j.table
+      ORDER BY bytes_on_disk DESC`,
+    skip_indexes: `SELECT table, name, type_full, expr, granularity,
+        data_compressed_bytes + marks_bytes AS bytes_on_disk, data_uncompressed_bytes
+      FROM system.data_skipping_indices WHERE database = '${db}'
+      ORDER BY bytes_on_disk DESC`,
+    // normalizeQuery replaces every literal with ?, and the literals are the
+    // part a visitor chose. The client's address columns are never selected.
+    processes: `SELECT query_kind, elapsed, read_rows, read_bytes, total_rows_approx,
+        written_rows, memory_usage, is_internal,
+        substring(normalizeQuery(query), 1, 400) AS query_shape
+      FROM system.processes WHERE query_id != queryID()
+      ORDER BY elapsed DESC LIMIT 50`,
     columns: `SELECT table, name AS column, type, compression_codec,
         data_compressed_bytes, data_uncompressed_bytes
       FROM system.columns WHERE database = '${db}'
-      ORDER BY data_compressed_bytes DESC LIMIT 30`,
+      ORDER BY data_compressed_bytes DESC LIMIT 40`,
     // A projection being built is a mutation with parts_to_do counting down,
     // and its running work shows under merges.
     mutations: `SELECT table, substring(command, 1, 500) AS command, create_time, parts_to_do,
@@ -213,8 +255,16 @@ type Row = {
   max_ms: number
 }
 
-const HOUR_MS = 3_600_000
-const MAX_SAMPLES = 200_000
+const MINUTE_MS = 60_000
+const HOUR_MS = 60 * MINUTE_MS
+/** Each window, and the width of the buckets it is charted in. */
+export const WINDOWS = {
+  hour: { ms: HOUR_MS, bucketMs: 5 * MINUTE_MS },
+  day: { ms: 24 * HOUR_MS, bucketMs: HOUR_MS },
+  week: { ms: 7 * 24 * HOUR_MS, bucketMs: HOUR_MS },
+} as const
+export type Window = keyof typeof WINDOWS
+const MAX_SAMPLES = 500_000
 /** How many paths that are not endpoints are named; the rest fold into "other". */
 const NAMED_OTHER_PATHS = 5
 const MAX_PATH_LENGTH = 80
@@ -236,8 +286,13 @@ function summarise(path: string, endpoint: boolean, list: Sample[]): Row {
   }
 }
 
+type Bucket = { start: string; requests: number; errors: number; p95_ms: number | null }
+
+/** `from` is where the API's memory of requests begins, which after a restart is later than the window's start. */
+type Summary = { window: Window; from: string; to: string; buckets: Bucket[]; rows: Row[] }
+
 /**
- * The last hour of requests, by path. `known` is the set of paths the API
+ * The last week of requests, in memory only, by path. `known` is the set of paths the API
  * serves. Of the rest, which are scanners and typos, only the commonest few
  * are named and everything else is one "other" row, so a crawler cannot grow
  * the report one made-up path at a time. Those paths are cut short and
@@ -246,37 +301,71 @@ function summarise(path: string, endpoint: boolean, list: Sample[]): Row {
  */
 export class RequestStats {
   private samples: Sample[] = []
+  private readonly startedAt: number
+  /** Past MAX_SAMPLES the oldest are dropped, and the summary must not claim them. */
+  private forgotBefore = 0
 
   constructor(
     private readonly known: ReadonlySet<string>,
     private readonly now: () => number = Date.now,
-  ) {}
+  ) {
+    this.startedAt = now()
+  }
 
   record(path: string, status: number, ms: number): void {
     const endpoint = this.known.has(path)
     const name = endpoint ? path : redact(path).slice(0, MAX_PATH_LENGTH)
     this.samples.push({ at: this.now(), path: name, endpoint, status, ms })
-    if (this.samples.length > MAX_SAMPLES) this.samples.splice(0, this.samples.length - MAX_SAMPLES)
+    if (this.samples.length > MAX_SAMPLES) {
+      const dropped = this.samples.splice(0, this.samples.length - MAX_SAMPLES)
+      this.forgotBefore = dropped[dropped.length - 1].at
+    }
+  }
+
+  summary(window: Window): Summary {
+    const now = this.now()
+    const { ms, bucketMs } = WINDOWS[window]
+    const weekAgo = now - WINDOWS.week.ms
+    this.samples = this.samples.filter((s) => s.at > weekAgo)
+    const since = now - ms
+    const inWindow = this.samples.filter((s) => s.at > since)
+    const count = ms / bucketMs
+    const buckets = Array.from({ length: count }, (): Sample[] => [])
+    for (const s of inWindow) buckets[Math.min(count - 1, Math.floor((s.at - since) / bucketMs))].push(s)
+    return {
+      window,
+      from: new Date(Math.max(since, this.startedAt, this.forgotBefore)).toISOString(),
+      to: new Date(now).toISOString(),
+      buckets: buckets.map((list, i) => ({
+        start: new Date(since + i * bucketMs).toISOString(),
+        requests: list.length,
+        errors: list.filter((s) => s.status >= 500).length,
+        p95_ms: list.length ? Math.round(percentile(list.map((s) => s.ms).sort((x, y) => x - y), 0.95)) : null,
+      })),
+      rows: byPathRows(inWindow),
+    }
   }
 
   lastHour(): Row[] {
-    const since = this.now() - HOUR_MS
-    this.samples = this.samples.filter((s) => s.at > since)
-    const byPath = new Map<string, Sample[]>()
-    for (const s of this.samples) {
-      const list = byPath.get(s.path)
-      if (list) list.push(s)
-      else byPath.set(s.path, [s])
-    }
-    const commonestFirst = (x: Row, y: Row) => y.requests - x.requests || x.path.localeCompare(y.path)
-    const rows = [...byPath].map(([path, list]) => summarise(path, list[0].endpoint, list))
-    const endpoints = rows.filter((r) => r.endpoint).sort(commonestFirst)
-    const others = rows.filter((r) => !r.endpoint).sort(commonestFirst)
-    const rest = others.slice(NAMED_OTHER_PATHS).flatMap((r) => byPath.get(r.path) ?? [])
-    return [
-      ...endpoints,
-      ...others.slice(0, NAMED_OTHER_PATHS),
-      ...(rest.length ? [summarise('other', false, rest)] : []),
-    ]
+    return this.summary('hour').rows
   }
+}
+
+function byPathRows(samples: Sample[]): Row[] {
+  const byPath = new Map<string, Sample[]>()
+  for (const s of samples) {
+    const list = byPath.get(s.path)
+    if (list) list.push(s)
+    else byPath.set(s.path, [s])
+  }
+  const commonestFirst = (x: Row, y: Row) => y.requests - x.requests || x.path.localeCompare(y.path)
+  const rows = [...byPath].map(([path, list]) => summarise(path, list[0].endpoint, list))
+  const endpoints = rows.filter((r) => r.endpoint).sort(commonestFirst)
+  const others = rows.filter((r) => !r.endpoint).sort(commonestFirst)
+  const rest = others.slice(NAMED_OTHER_PATHS).flatMap((r) => byPath.get(r.path) ?? [])
+  return [
+    ...endpoints,
+    ...others.slice(0, NAMED_OTHER_PATHS),
+    ...(rest.length ? [summarise('other', false, rest)] : []),
+  ]
 }
