@@ -134,20 +134,45 @@ describe('memo', () => {
 })
 
 describe('RequestStats', () => {
-  it('reports the last hour by known path, folding the rest into "other"', () => {
+  it('reports the last hour by endpoint, then the commonest other paths by name', () => {
     let now = 0
     const stats = new RequestStats(new Set(['/status', '/gtfs_routes/list']), () => now)
     stats.record('/status', 200, 5)
     now = 30 * 60_000
     for (const ms of [10, 20, 30, 40, 1000]) stats.record('/gtfs_routes/list', 200, ms)
     stats.record('/gtfs_routes/list', 500, 50)
-    stats.record('/wp-admin/x', 404, 1)
-    stats.record('/.env', 404, 1)
+    for (let i = 0; i < 4; i++) stats.record('/wp-admin/setup.php', 404, 1)
+    for (let i = 0; i < 3; i++) stats.record('/.env', 404, 1)
+    for (const p of ['/a', '/b', '/c', '/d', '/e', '/f']) stats.record(p, 404, 2)
 
     now = 61 * 60_000
-    expect(stats.lastHour()).toEqual([
-      { path: '/gtfs_routes/list', requests: 6, errors: 1, p50_ms: 40, p95_ms: 1000, max_ms: 1000 },
-      { path: 'other', requests: 2, errors: 0, p50_ms: 1, p95_ms: 1, max_ms: 1 },
+    const rows = stats.lastHour()
+    expect(rows[0]).toEqual({
+      path: '/gtfs_routes/list',
+      endpoint: true,
+      requests: 6,
+      errors: 1,
+      p50_ms: 40,
+      p95_ms: 1000,
+      max_ms: 1000,
+    })
+    const others = rows.filter((r) => !r.endpoint)
+    expect(others.map((r) => [r.path, r.requests])).toEqual([
+      ['/wp-admin/setup.php', 4],
+      ['/.env', 3],
+      ['/a', 1],
+      ['/b', 1],
+      ['/c', 1],
+      ['other', 3],
     ])
+  })
+
+  it('keeps no address and no unbounded path', () => {
+    const stats = new RequestStats(new Set())
+    stats.record('/93.172.10.4/probe', 404, 1)
+    stats.record(`/${'x'.repeat(500)}`, 404, 1)
+    const paths = stats.lastHour().map((r) => r.path)
+    expect(paths).toContain('/<ip>/probe')
+    expect(Math.max(...paths.map((p) => p.length))).toBeLessThanOrEqual(80)
   })
 })
