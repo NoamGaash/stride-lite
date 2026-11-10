@@ -87,30 +87,11 @@ variable "region" {
 # failing at a 4 GiB ceiling with MEMORY_LIMIT_EXCEEDED — production answers that
 # call, so a 4 GiB box would turn a slower endpoint into a 500 and break the one
 # acceptance criterion this project has.
-# TEMPORARY, for the first load only, and the next commit on main should put
-# `t4g.large` back.
-#
-# t4g.large is the size this project is costed and argued on, and it is the right
-# size to *serve* from. It is the wrong size to build from once: it is burstable,
-# 2 vCPU against a 30% baseline, and the first load saturates CPU for hours
-# — zstd-decompressing a 155 GB dump, inserting it, backfilling 163 days of
-# archive, then materialising four projections. That exhausts the CPU credits and
-# then runs at 30% of two cores, which turns a job measured at 14 h on six
-# throttled cores into days. It does not fail; it crawls, which is worse, because
-# nothing reports it.
-#
-# c7g.8xlarge is ~$0.97/hour, about $700 a month if it is left here. The budget
-# alarm at $150 fires after the fact, not before. Terraform changes this in place
-# — stop, modify, start — and the data lives on a separate EBS volume with
-# user_data_replace_on_change = false, so shrinking it later keeps the database
-# and does not re-run bootstrap. Shrink only once first-load.sh reports done: a
-# stop mid-load kills it, and although the stage file in
-# /var/lib/clickhouse/first-load.state resumes it, the hours are spent.
-# c7g.4xlarge (16 vCPU, 32 GiB), not c7g.8xlarge (32 vCPU): the account's
-# On-Demand Standard vCPU quota is 16, and this is the first and only instance
-# this project creates, so there is nothing else to share it with. 16 vCPU
-# non-burstable is still far ahead of t4g.large for the reason above; it is a
-# quota fit, not a cost compromise.
+# The first load ran on c7g.4xlarge (16 vCPU, non-burstable): it saturates CPU
+# for hours, and on t4g.large that exhausts the credits and crawls at 30% of two
+# cores. Serving does not, so the node comes back here once the load is done.
+# Changing this is a stop, modify and start of the same instance; the data
+# volume and the Elastic IP below both survive it.
 # The data volume already exists in this AZ; pinning the instance to the same
 # one is what makes aws_ebs_volume.data's own AZ reference a plan-time literal
 # instead of a value that depends on the instance existing. See the comment on
@@ -122,7 +103,7 @@ variable "availability_zone" {
 
 variable "instance_type" {
   type    = string
-  default = "c7g.4xlarge"
+  default = "t4g.large"
 }
 
 # 350 and not 400, and not 300. Measured on the local database 2026-11-07:
@@ -429,6 +410,16 @@ resource "aws_instance" "app" {
     ignore_changes = [ami, user_data]
   }
 
+  # A t4g defaults to "unlimited", which bills sustained CPU above the 30%
+  # baseline. "standard" slows down instead: a slow refresh beats a surprise
+  # charge, and /ops/metrics shows the load either way.
+  dynamic "credit_specification" {
+    for_each = startswith(var.instance_type, "t") ? [1] : []
+    content {
+      cpu_credits = "standard"
+    }
+  }
+
   tags = {
     Name    = "stride-lite"
     Project = "stride-lite"
@@ -503,13 +494,22 @@ resource "aws_acm_certificate_validation" "api" {
 # Egress volume is the single unknown this design cannot measure locally, so
 # the API is fronted by CloudFront: it caches the repeated query strings the
 # frontend issues, which bounds origin traffic instead of leaving it open-ended.
+# CloudFront's origin is a hostname, and an instance's own public address changes
+# on every stop and start, which resizing it is. An Elastic IP keeps it. While
+# attached it costs what any public IPv4 address costs, which the instance's own
+# already did.
+resource "aws_eip" "app" {
+  instance = aws_instance.app.id
+  domain   = "vpc"
+}
+
 resource "aws_cloudfront_distribution" "api" {
   enabled = true
   comment = "stride-lite API"
   aliases = var.api_domain == "" ? [] : [var.api_domain]
 
   origin {
-    domain_name = aws_instance.app.public_dns
+    domain_name = aws_eip.app.public_dns
     origin_id   = "api"
 
     custom_origin_config {
