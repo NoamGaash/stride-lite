@@ -8,6 +8,7 @@ import {
   memo,
   metricsSql,
   parseLogsQuery,
+  parseRequestsQuery,
   readLogs,
   redact,
   RequestStats,
@@ -72,6 +73,22 @@ describe('the metrics queries', () => {
     expect(sql.storage_not_served).toContain('NOT active')
     expect(sql.storage_not_served).toContain('system.detached_parts')
     expect(sql.columns).toContain('data_compressed_bytes')
+  })
+
+  /** The page charts each table's bytes by what they are for, and lists what runs now. */
+  it('break storage down by purpose, and list the work in progress', () => {
+    const sql = metricsSql('stride')
+    for (const col of ['data_compressed_bytes', 'primary_key_size', 'marks_bytes', 'secondary_indices_compressed_bytes'])
+      expect(sql.storage_by_table).toContain(col)
+    expect(sql.storage_by_table).toContain('system.projection_parts')
+    expect(sql.skip_indexes).toContain('system.data_skipping_indices')
+    expect(sql.processes).toContain('system.processes')
+    expect(sql.processes).toContain('normalizeQuery')
+  })
+
+  /** A running query's text is the API's own SQL, but the values in it come from a visitor. */
+  it('show a running query only with its literals taken out', () => {
+    expect(metricsSql('stride').processes).not.toMatch(/[\s,(]query[\s,]/)
   })
 
   it('read the database they are given', () => {
@@ -174,5 +191,40 @@ describe('RequestStats', () => {
     const paths = stats.lastHour().map((r) => r.path)
     expect(paths).toContain('/<ip>/probe')
     expect(Math.max(...paths.map((p) => p.length))).toBeLessThanOrEqual(80)
+  })
+
+  it('summarises a day and a week as well as an hour, in time buckets', () => {
+    const HOUR = 3_600_000
+    let now = 10 * 24 * HOUR
+    const stats = new RequestStats(new Set(['/status']), () => now)
+    stats.record('/status', 200, 5)
+    now += 3 * HOUR
+    stats.record('/status', 500, 7)
+    now += 30 * 60_000
+
+    expect(stats.summary('hour').rows.map((r) => r.requests)).toEqual([1])
+    const day = stats.summary('day')
+    expect(day.rows).toEqual([
+      { path: '/status', endpoint: true, requests: 2, errors: 1, p50_ms: 7, p95_ms: 7, max_ms: 7 },
+    ])
+    expect(day.buckets).toHaveLength(24)
+    expect(day.buckets.reduce((n, b) => n + b.requests, 0)).toBe(2)
+    expect(day.buckets.find((b) => b.errors === 1)?.requests).toBe(1)
+    expect(stats.summary('week').buckets).toHaveLength(7 * 24)
+    expect(stats.summary('hour').buckets).toHaveLength(12)
+  })
+
+  it('says when its memory starts, so a week after a restart is not read as a quiet week', () => {
+    let now = 1_000_000_000
+    const stats = new RequestStats(new Set(), () => now)
+    now += 60_000
+    expect(stats.summary('week').from).toBe(new Date(1_000_000_000).toISOString())
+    expect(stats.summary('week').to).toBe(new Date(now).toISOString())
+  })
+
+  it('accepts only the three windows', () => {
+    expect(parseRequestsQuery(new URLSearchParams(''))).toBe('hour')
+    expect(parseRequestsQuery(new URLSearchParams('window=week'))).toBe('week')
+    expect(() => parseRequestsQuery(new URLSearchParams('window=year'))).toThrow()
   })
 })
