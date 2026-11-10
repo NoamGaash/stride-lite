@@ -2,12 +2,14 @@
 # Load the GTFS feed for a day.
 #
 #   ./ingest/gtfs.sh 2026 11 03   # that day
-#   ./ingest/gtfs.sh              # whichever of the last three days is missing
+#   ./ingest/gtfs.sh              # every day after the newest loaded, up to today
 #
 # The archive publishes a day's feed at about 00:01 UTC that same day, so a
-# morning run can load today, as production serves it. Three days rather than
-# one so a failed or skipped run heals on the next, and the check comes before
-# the download, because every byte fetched is billed to Hasadna's bucket.
+# morning run can load today, as production serves it. Starting from the newest
+# day loaded, as ingest/catchup.sh does for SIRI, means a failed run or two weeks
+# switched off both heal on the next run. It stops at the first day that fails
+# rather than skipping it, so a gap is retried instead of left behind a newer
+# day; the archive has every day of 2026, so a permanent hole is not expected.
 #
 # The archive is public and in the same region as everything else, so this
 # needs no credentials. One day is a 149 MB zip holding a 596 MB stop_times.txt;
@@ -69,18 +71,20 @@ if [ $# -ge 3 ]; then
   exit
 fi
 
-failed=0
-for ago in 2 1 0; do
-  date_iso=$(date -u -d "$ago days ago" +%F)
-  loaded=$($CH --database "$CH_DB" --query "SELECT count() FROM gtfs_route WHERE date = '$date_iso'" </dev/null)
-  if [ "$loaded" != 0 ]; then
-    echo "== $date_iso already loaded"
-    continue
-  fi
+newest=$($CH --database "$CH_DB" --query "SELECT ifNull(toString(max(date)), '') FROM gtfs_route" </dev/null)
+if [ -n "$newest" ]; then
+  day=$(date -u -d "$newest + 1 day" +%F)
+else
+  day=$(date -u +%F)
+fi
+today=$(date -u +%F)
+[ "$day" \> "$today" ] && echo "== up to date: $newest"
+
+while ! [ "$day" \> "$today" ]; do
   # A fresh shell and not a subshell: inside `|| ...` bash ignores set -e, and a
   # failed download would go on to truncate the staging tables and derive from
   # nothing.
   # shellcheck disable=SC2046
-  "$self" $(date -u -d "$date_iso" +'%Y %m %d') || { echo "== $date_iso failed" >&2; failed=1; }
+  "$self" $(date -u -d "$day" +'%Y %m %d') || { echo "== $day failed, stopping here" >&2; exit 1; }
+  day=$(date -u -d "$day + 1 day" +%F)
 done
-exit "$failed"
