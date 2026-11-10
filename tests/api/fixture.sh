@@ -17,7 +17,7 @@ cd "$(dirname "$0")/../.."
 
 CH_DB=${CH_DB:-stride_test}
 CH=${CH_CLIENT:-clickhouse client}
-DIR=tests/api/fixture
+FIXTURE=tests/api/fixture.tar.zst
 DAY=2025-03-14
 HOUR=08
 # Tnufa, and three small Jerusalem operators whose names put a hyphen where
@@ -63,18 +63,25 @@ build() {
 }
 
 cut() {
-  rm -f "$DIR"/*.native.zst
+  local tmp
+  tmp=$(mktemp -d)
   for t in "${!CUT[@]}"; do
-    ch --query "${CUT[$t]} ORDER BY tuple(*) INTO OUTFILE '$PWD/$DIR/$t.native.zst' FORMAT Native"
+    ch --query "${CUT[$t]} ORDER BY tuple(*) INTO OUTFILE '$tmp/$t.native' FORMAT Native"
   done
-  du -ch "$DIR"/*.native.zst | tail -1
+  tar -C "$tmp" -cf - . | zstd -19 -q > "$FIXTURE"
+  rm -rf "$tmp"
+  du -h "$FIXTURE"
 }
 
 load() {
   schema
-  for f in "$DIR"/*.native.zst; do
-    ch --query "INSERT INTO $(basename "$f" .native.zst) FROM INFILE '$PWD/$f' FORMAT Native"
+  local tmp
+  tmp=$(mktemp -d)
+  zstd -dc "$FIXTURE" | tar -C "$tmp" -xf -
+  for f in "$tmp"/*.native; do
+    ch --query "INSERT INTO $(basename "$f" .native) FROM INFILE '$f' FORMAT Native"
   done
+  rm -rf "$tmp"
   # Derived, so measured here rather than shipped: computed before the cut it
   # would describe the whole day and not the rows the fixture holds.
   ch --param_day="$DAY" --query "INSERT INTO ingest_day_health SELECT * FROM ingest_day_health_src(day = {day:Date})"
