@@ -71,7 +71,11 @@ export interface EndpointDef {
    * heavy as upstream's.
    */
   joins?: string[]
-  /** Fields that may be used in `order_by`, mapped to their SQL expression. */
+  /**
+   * `order_by` fields whose SQL is not simply the base table's own column.
+   * Every field in `fields` is orderable as `<alias>.<field>` regardless, since
+   * upstream resolves the name with getattr on the model.
+   */
   orderable?: Record<string, string>
   /**
    * Which of those are text columns. They sort differently: see `collate`.
@@ -290,8 +294,11 @@ function parseLimit(raw: string | null): number {
  * production puts "ירושלים - עיסאוויה…" after "ירושלים-דרום…", a byte sort puts
  * it before, and this expression reproduces production's order on all 20 rows.
  */
-function collate(expr: string): string {
-  return `replaceRegexpAll(${expr}, '[^\\pL\\pN]', '') COLLATE 'he', ${expr} COLLATE 'he'`
+function collate(expr: string, dir: string): string[] {
+  return [
+    `replaceRegexpAll(${expr}, '[^\\pL\\pN]', '') ${dir} COLLATE 'he'`,
+    `${expr} ${dir} COLLATE 'he'`,
+  ]
 }
 
 function buildOrderBy(def: EndpointDef, sent: string | null): string {
@@ -303,12 +310,12 @@ function buildOrderBy(def: EndpointDef, sent: string | null): string {
     const trimmed = piece.trim()
     if (!trimmed) continue
     const [field, direction] = trimmed.split(/\s+/)
-    const expr = def.orderable?.[field]
+    const expr = def.orderable?.[field] ?? (def.fields.includes(field) ? `${def.alias}.${field}` : undefined)
     if (!expr) throw new UnknownOrderField(def.model, field)
     if (field.toLowerCase() === 'id') hasId = true
     const dir = direction === 'desc' ? 'DESC' : 'ASC'
     if (def.textOrder?.includes(field)) {
-      parts.push(...collate(expr).split(', ').map((e) => `${e} ${dir}`))
+      parts.push(...collate(expr, dir))
     } else {
       parts.push(`${expr} ${dir}`)
     }

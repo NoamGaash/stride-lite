@@ -84,6 +84,16 @@ describe('ordering', () => {
     expect(sql).toContain('ORDER BY r.id DESC')
   })
 
+  it('orders a text field by its collation key, then the full string, then id', () => {
+    const sql = buildQuery(
+      { ...routes, fields: [...routes.fields, 'name'], textOrder: ['name'] },
+      new URLSearchParams({ order_by: 'name desc' }),
+    ).sql
+    expect(sql).toContain(
+      "ORDER BY replaceRegexpAll(r.name, '[^\\pL\\pN]', '') DESC COLLATE 'he', r.name DESC COLLATE 'he', r.id DESC",
+    )
+  })
+
   it('appends id DESC as a tiebreaker when ordering by another field', () => {
     expect(q({ order_by: 'line_ref asc' })).toContain('ORDER BY r.line_ref ASC, r.id DESC')
   })
