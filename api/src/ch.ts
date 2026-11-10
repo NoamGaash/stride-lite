@@ -1,6 +1,18 @@
 const CH_URL = process.env.CH_URL ?? 'http://127.0.0.1:8123'
 const CH_USER = process.env.CH_USER ?? 'default'
 const CH_PASSWORD = process.env.CH_PASSWORD ?? ''
+/**
+ * CloudFront stops waiting for the origin after 30 seconds, and ClickHouse does
+ * not notice: a query past that point answers nobody and holds the node's cores,
+ * once for 43 minutes. Nothing the API serves should take this long.
+ */
+export const MAX_QUERY_SECONDS = Number(process.env.CH_MAX_QUERY_SECONDS ?? 30)
+
+export function queryUrl(base = CH_URL): string {
+  const url = new URL(base)
+  url.searchParams.set('max_execution_time', String(MAX_QUERY_SECONDS))
+  return url.toString()
+}
 
 export class ClickHouseError extends Error {
   constructor(
@@ -27,7 +39,7 @@ export async function scalar(sql: string): Promise<string> {
 }
 
 async function run(sql: string): Promise<string> {
-  const res = await fetch(CH_URL, {
+  const res = await fetch(queryUrl(), {
     method: 'POST',
     headers: {
       'X-ClickHouse-User': CH_USER,
