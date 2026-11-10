@@ -76,7 +76,10 @@ for ago in 2 1 0; do
     echo "== $date_iso already loaded"
     continue
   fi
+  # A fresh shell and not a subshell: inside `|| ...` bash ignores set -e, and a
+  # failed download would go on to truncate the staging tables and derive from
+  # nothing.
   # shellcheck disable=SC2046
-  ( load_day $(date -u -d "$date_iso" +'%Y %m %d') ) || { echo "== $date_iso failed" >&2; failed=1; }
+  "$0" $(date -u -d "$date_iso" +'%Y %m %d') || { echo "== $date_iso failed" >&2; failed=1; }
 done
 exit "$failed"

@@ -29,5 +29,7 @@ got=$(sed -E 's#.*/gtfs_archive/([0-9/]+)/.*#\1#' "$BIN/urls" 2>/dev/null | sort
 want="$(day '2 days ago') $(day today) "
 
 [ "$got" = "$want" ] || { echo "FAIL: fetched '$got', want '$want' (today and the day before yesterday, not yesterday, which is loaded)" >&2; exit 1; }
+others=$($CH --query "SELECT count() FROM system.tables WHERE database = '$DB' AND name != 'gtfs_route'" </dev/null)
+[ "$others" = 0 ] || { echo "FAIL: a failed download went on to stage and load ($others tables created)" >&2; exit 1; }
 [ "$rc" != 0 ] || { echo "FAIL: every fetch failed and the script still exited 0" >&2; exit 1; }
 echo ok
