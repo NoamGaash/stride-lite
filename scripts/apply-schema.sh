@@ -41,15 +41,24 @@ if [ "${PROJECTIONS:-1}" = 1 ]; then
   # system.parts.projections is the projections a part actually carries, so this
   # asks the data rather than a bookkeeping table: a projection declared but never
   # filled, and one filled before a later part arrived, both show up here.
+  #
+  # A MATERIALIZE still running leaves its parts looking unfilled until it ends,
+  # and a deploy in those hours would queue a second one that rewrites every part
+  # again — so a pair with an unfinished MATERIALIZE is not pending, it is busy.
   pending=$($CH --database "$CH_DB" --query "
     SELECT DISTINCT pr.table, pr.name
     FROM system.projections AS pr
     INNER JOIN system.parts AS p ON p.database = pr.database AND p.table = pr.table
     WHERE pr.database = '$CH_DB' AND p.active AND NOT has(p.projections, pr.name)
+      AND (pr.table, pr.name) NOT IN (
+        SELECT table, extract(command, 'MATERIALIZE PROJECTION \\x60?(\\w+)')
+        FROM system.mutations
+        WHERE database = '$CH_DB' AND NOT is_done
+          AND command LIKE '%MATERIALIZE PROJECTION%')
     ORDER BY pr.table, pr.name FORMAT TSV")
 
   if [ -z "$pending" ]; then
-    echo "projections: all materialised"
+    echo "projections: none to start (complete, or still materialising)"
   else
     # Asynchronous on purpose: these are mutations measured in tens of minutes
     # each, and the API serves correct answers from the base tables while they
