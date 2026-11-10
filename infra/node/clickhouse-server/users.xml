@@ -1,0 +1,14 @@
+<clickhouse>
+    <profiles><default>
+        <max_memory_usage>6000000000</max_memory_usage>
+        <max_bytes_before_external_group_by>3000000000</max_bytes_before_external_group_by>
+    </default></profiles>
+    <users><default>
+        <password></password>
+        <networks><ip>127.0.0.1</ip></networks>
+        <profile>default</profile>
+        <quota>default</quota>
+        <access_management>1</access_management>
+    </default></users>
+    <quotas><default/></quotas>
+</clickhouse>

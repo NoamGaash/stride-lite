@@ -1,4 +1,4 @@
-const CH_URL = process.env.CH_URL ?? 'http://127.0.0.1:8223'
+const CH_URL = process.env.CH_URL ?? 'http://127.0.0.1:8123'
 const CH_USER = process.env.CH_USER ?? 'default'
 const CH_PASSWORD = process.env.CH_PASSWORD ?? ''
 

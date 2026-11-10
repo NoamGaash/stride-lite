@@ -134,6 +134,27 @@ jobs:
         env:
           CH_CLIENT: ./clickhouse client
 
+      # MATERIALIZE runs for hours on the real tables, and until it ends its parts
+      # still look unfilled. A deploy in those hours must not queue a second one.
+      # STOP MERGES holds the first mutation unfinished, as a long one would be.
+      - name: Expect no second MATERIALIZE while the first is still running
+        run: |
+          export CH_DB=inflight
+          PROJECTIONS=0 ./scripts/apply-schema.sh
+          ./clickhouse client --query "
+            INSERT INTO inflight.gtfs_ride_stop (id, gtfs_ride_id)
+            SELECT number, number FROM numbers(100000)"
+          ./clickhouse client --query "SYSTEM STOP MERGES inflight.gtfs_ride_stop"
+          ./scripts/apply-schema.sh
+          ./scripts/apply-schema.sh
+          n=$(./clickhouse client --query "
+            SELECT count() FROM system.mutations
+            WHERE database = 'inflight' AND command LIKE '%MATERIALIZE PROJECTION%by_ride%'")
+          ./clickhouse client --query "DROP DATABASE inflight"
+          test "$n" = 1 || { echo "got $n MATERIALIZE mutations for by_ride, want 1"; exit 1; }
+        env:
+          CH_CLIENT: ./clickhouse client
+
       # The guard that keeps a first load from emptying a database somebody
       # else's data is in. It is the one failure mode of scripts/first-load.sh
       # that destroys rather than delays.
@@ -205,12 +226,16 @@ jobs:
       - run: terraform fmt -check -recursive
       - run: terraform init -backend=false
       - run: terraform validate
+      - run: terraform test
       # terraform validate does not look at the IAM policy, and IAM accepts an
       # action name it does not define, so a typo there is a permission that is
       # silently missing until an apply fails on it.
       - name: Expect every IAM action in the deployer policy to exist
         working-directory: .
         run: python3 scripts/check-iam-actions.py infra/deployer-policy.json infra/github-oidc-trust.json
+      - name: Node config follows the repository on every deploy
+        working-directory: .
+        run: tests/install-node-config.sh
 
   differential:
     # Compares endpoints against the live production API, which is a non-profit's

@@ -1,0 +1,31 @@
+# A unit and not a cron entry, because it is one job that must run once, may run
+# for hours, and has to survive the end of cloud-init. Type=oneshot with
+# TimeoutStartSec=infinity: the default start timeout is 90 seconds and this is
+# measured in hours, so without that line systemd kills the load and reports a
+# failure that looks like the script's.
+#
+# Restart=on-failure with ten minutes between tries, because every stage is
+# resumable and the usual reason to fail is the network. The script keeps its
+# own state on the data volume and skips what finished.
+#
+# node.env holds AWS_REGION, BACKUP_URL and BACKUP_ROLE_ARN, written by
+# infra/bootstrap.sh from Terraform. Optional so that a node bootstrapped before
+# that file existed still loads its units; without it a first load rebuilds from
+# public data instead of restoring our backup.
+[Unit]
+Description=stride-lite first load
+After=clickhouse.service stride-api.service
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/stride-lite
+Environment=CH_DB=stride
+Environment="CH_CLIENT=clickhouse client"
+EnvironmentFile=-/etc/stride-lite/node.env
+ExecStart=/opt/stride-lite/scripts/first-load.sh
+TimeoutStartSec=infinity
+Restart=on-failure
+RestartSec=600
+StandardOutput=append:/var/log/stride-first-load.log
+StandardError=append:/var/log/stride-first-load.log
+[Install]
+WantedBy=multi-user.target
