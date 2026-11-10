@@ -47,6 +47,10 @@ jobs:
         env:
           CH_CLIENT: ./clickhouse client
         run: tests/load-from-dump.sh
+      - name: GTFS loads whichever recent days are missing, today included
+        env:
+          CH_CLIENT: ./clickhouse client
+        run: tests/gtfs-days.sh
 
   schema:
     # The schema has to apply to a clean ClickHouse, which is cheap to prove and
