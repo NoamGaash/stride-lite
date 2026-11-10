@@ -201,19 +201,48 @@ export function memo<T>(ttlMs: number): (key: string, make: () => Promise<T>) =>
   }
 }
 
-type Sample = { at: number; path: string; status: number; ms: number }
+type Sample = { at: number; path: string; endpoint: boolean; status: number; ms: number }
+
+type Row = {
+  path: string
+  endpoint: boolean
+  requests: number
+  errors: number
+  p50_ms: number
+  p95_ms: number
+  max_ms: number
+}
 
 const HOUR_MS = 3_600_000
 const MAX_SAMPLES = 200_000
+/** How many paths that are not endpoints are named; the rest fold into "other". */
+const NAMED_OTHER_PATHS = 5
+const MAX_PATH_LENGTH = 80
 
 function percentile(sorted: number[], p: number): number {
   return sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))]
 }
 
+function summarise(path: string, endpoint: boolean, list: Sample[]): Row {
+  const ms = list.map((s) => s.ms).sort((x, y) => x - y)
+  return {
+    path,
+    endpoint,
+    requests: list.length,
+    errors: list.filter((s) => s.status >= 500).length,
+    p50_ms: Math.round(percentile(ms, 0.5)),
+    p95_ms: Math.round(percentile(ms, 0.95)),
+    max_ms: Math.round(ms[ms.length - 1]),
+  }
+}
+
 /**
  * The last hour of requests, by path. `known` is the set of paths the API
- * serves; anything else counts as "other", so a crawler cannot grow the
- * report one made-up path at a time. Nothing about the requester is kept.
+ * serves. Of the rest, which are scanners and typos, only the commonest few
+ * are named and everything else is one "other" row, so a crawler cannot grow
+ * the report one made-up path at a time. Those paths are cut short and
+ * redacted; the query string is never seen, and nothing about the requester
+ * is kept.
  */
 export class RequestStats {
   private samples: Sample[] = []
@@ -224,11 +253,13 @@ export class RequestStats {
   ) {}
 
   record(path: string, status: number, ms: number): void {
-    this.samples.push({ at: this.now(), path: this.known.has(path) ? path : 'other', status, ms })
+    const endpoint = this.known.has(path)
+    const name = endpoint ? path : redact(path).slice(0, MAX_PATH_LENGTH)
+    this.samples.push({ at: this.now(), path: name, endpoint, status, ms })
     if (this.samples.length > MAX_SAMPLES) this.samples.splice(0, this.samples.length - MAX_SAMPLES)
   }
 
-  lastHour(): { path: string; requests: number; errors: number; p50_ms: number; p95_ms: number; max_ms: number }[] {
+  lastHour(): Row[] {
     const since = this.now() - HOUR_MS
     this.samples = this.samples.filter((s) => s.at > since)
     const byPath = new Map<string, Sample[]>()
@@ -237,18 +268,15 @@ export class RequestStats {
       if (list) list.push(s)
       else byPath.set(s.path, [s])
     }
-    return [...byPath]
-      .map(([path, list]) => {
-        const ms = list.map((s) => s.ms).sort((x, y) => x - y)
-        return {
-          path,
-          requests: list.length,
-          errors: list.filter((s) => s.status >= 500).length,
-          p50_ms: Math.round(percentile(ms, 0.5)),
-          p95_ms: Math.round(percentile(ms, 0.95)),
-          max_ms: Math.round(ms[ms.length - 1]),
-        }
-      })
-      .sort((x, y) => y.requests - x.requests)
+    const commonestFirst = (x: Row, y: Row) => y.requests - x.requests || x.path.localeCompare(y.path)
+    const rows = [...byPath].map(([path, list]) => summarise(path, list[0].endpoint, list))
+    const endpoints = rows.filter((r) => r.endpoint).sort(commonestFirst)
+    const others = rows.filter((r) => !r.endpoint).sort(commonestFirst)
+    const rest = others.slice(NAMED_OTHER_PATHS).flatMap((r) => byPath.get(r.path) ?? [])
+    return [
+      ...endpoints,
+      ...others.slice(0, NAMED_OTHER_PATHS),
+      ...(rest.length ? [summarise('other', false, rest)] : []),
+    ]
   }
 }
