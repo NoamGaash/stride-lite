@@ -21,7 +21,7 @@ WorkingDirectory=/opt/stride-lite
 Environment=CH_DB=stride
 Environment="CH_CLIENT=clickhouse client"
 EnvironmentFile=-/etc/stride-lite/node.env
-ExecStart=/opt/stride-lite/scripts/first-load.sh
+ExecStart=/bin/bash -c 'set -o pipefail; /opt/stride-lite/scripts/first-load.sh 2>&1 | /opt/stride-lite/scripts/stamp-lines.sh'
 TimeoutStartSec=infinity
 Restart=on-failure
 RestartSec=600
