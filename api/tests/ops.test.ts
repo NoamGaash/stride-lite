@@ -65,6 +65,15 @@ describe('the metrics queries', () => {
     expect(all).not.toMatch(/\*/)
   })
 
+  /** Where the disk goes: what serves, what only waits to be deleted, and what dominates. */
+  it('account for storage beyond the active parts', () => {
+    const sql = metricsSql('stride')
+    expect(sql.projections).toContain('system.projection_parts')
+    expect(sql.storage_not_served).toContain('NOT active')
+    expect(sql.storage_not_served).toContain('system.detached_parts')
+    expect(sql.columns).toContain('data_compressed_bytes')
+  })
+
   it('read the database they are given', () => {
     expect(metricsSql('prod').tables).toContain("database = 'prod'")
   })
