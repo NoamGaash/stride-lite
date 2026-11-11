@@ -11,7 +11,7 @@ DB=gtfs_days_test
 BIN=$(mktemp -d); trap 'rm -rf "$BIN"; $CH --query "DROP DATABASE IF EXISTS $DB" </dev/null' EXIT
 
 day() { date -u -d "$1" +%Y/%m/%d; }
-NOT_ARCHIVED=$(day '20 days ago')
+NOT_ARCHIVED=$(day '1 day ago')
 
 # HEAD (-I) answers whether the archive has a day: every day but NOT_ARCHIVED.
 # A download (GET) is recorded and fails.
@@ -54,15 +54,21 @@ run() {
 
 # A hole behind the newest GTFS day is the case that matters: the first load
 # brought SIRI up to date and GTFS only for its last day. The day the archive
-# lacks is skipped, the first real hole is fetched, its failure stops the run
-# before anything newer, and nothing is staged from a failed download.
-run "20 days ago, 10 days ago, 5 days ago, 2 days ago, today" "2 days ago"
+# lacks is skipped, the newest real hole is fetched, its failure stops the run
+# before anything older, and nothing is staged from a failed download.
+run "10 days ago, 2 days ago, 1 day ago, today" "2 days ago, today"
 want="$(day '10 days ago') "
 [ "$gets" = "$want" ] || { cat "$BIN/out"; echo "FAIL: downloaded '$gets', want '$want'" >&2; exit 1; }
 grep -qx "$NOT_ARCHIVED" "$BIN/heads" || { echo "FAIL: never asked the archive about $NOT_ARCHIVED" >&2; exit 1; }
 [ "$rc" != 0 ] || { echo "FAIL: the download failed and the script still exited 0" >&2; exit 1; }
 others=$($CH --query "SELECT count() FROM system.tables WHERE database = '$DB' AND name NOT IN ('gtfs_route', 'siri_snapshot_seen')" </dev/null)
 [ "$others" = 0 ] || { echo "FAIL: a failed download went on to stage and load ($others tables created)" >&2; exit 1; }
+
+# Newest first: the days people look at are the recent ones, and a long hole
+# takes several runs to fill.
+run "10 days ago, 5 days ago, today" "today"
+want="$(day '5 days ago') "
+[ "$gets" = "$want" ] || { echo "FAIL: with a hole of two days, fetched '$gets' first, want the newer '$want'" >&2; exit 1; }
 
 # Today is loaded even before any SIRI for it has landed.
 run "" ""
