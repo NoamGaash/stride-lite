@@ -1,8 +1,8 @@
-import { createServer } from 'node:http'
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { availableParallelism } from 'node:os'
 import { gzip } from 'node:zlib'
 import { promisify } from 'node:util'
-import { query, scalar, lit, ClickHouseError } from './ch'
+import { query, scalar, lit, ClickHouseError, requestSignal } from './ch'
 import { buildQuery, BadRequest, BadInput, TzRequired, UnknownOrderField } from './sql'
 import { endpoints, getEndpoints } from './registry'
 import { rawEndpoints, wrap, type RawEndpointDef } from './raw'
@@ -126,7 +126,15 @@ const PREFLIGHT_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Headers': 'Accept, Accept-Language, Content-Language, Content-Type',
 }
 
-const server = createServer(async (req, res) => {
+const server = createServer((req, res) => {
+  const visitor = new AbortController()
+  res.on('close', () => {
+    if (!res.writableFinished) visitor.abort()
+  })
+  return requestSignal.run(visitor.signal, () => handle(req, res))
+})
+
+async function handle(req: IncomingMessage, res: ServerResponse): Promise<unknown> {
   const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
   const wantsGzip = /\bgzip\b/.test(req.headers['accept-encoding'] ?? '')
   const started = performance.now()
@@ -264,10 +272,12 @@ const server = createServer(async (req, res) => {
       console.error('clickhouse error for sql:\n', err.sql, '\n', err.message)
       return await send(500, { detail: 'query failed' })
     }
+    // The visitor left and took the query with them; there is no one to answer.
+    if (err instanceof Error && err.name === 'AbortError') return
     console.error(err)
     return await send(500, { detail: 'internal error' })
   }
-})
+}
 
 /**
  * Both places this runs reach it from outside its own network namespace: the

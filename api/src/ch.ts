@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
+
 const CH_URL = process.env.CH_URL ?? 'http://127.0.0.1:8123'
 const CH_USER = process.env.CH_USER ?? 'default'
 const CH_PASSWORD = process.env.CH_PASSWORD ?? ''
@@ -8,9 +10,18 @@ const CH_PASSWORD = process.env.CH_PASSWORD ?? ''
  */
 export const MAX_QUERY_SECONDS = Number(process.env.CH_MAX_QUERY_SECONDS ?? 30)
 
+/**
+ * The signal of the HTTP request being served. A visitor who leaves aborts the
+ * fetch, which closes the connection, and ClickHouse then cancels the query:
+ * only because it is read-only, which the API's queries all are.
+ */
+export const requestSignal = new AsyncLocalStorage<AbortSignal>()
+
 export function queryUrl(base = CH_URL): string {
   const url = new URL(base)
   url.searchParams.set('max_execution_time', String(MAX_QUERY_SECONDS))
+  url.searchParams.set('readonly', '2')
+  url.searchParams.set('cancel_http_readonly_queries_on_client_close', '1')
   return url.toString()
 }
 
@@ -47,6 +58,7 @@ async function run(sql: string): Promise<string> {
       'Content-Type': 'text/plain; charset=utf-8',
     },
     body: sql,
+    signal: requestSignal.getStore(),
   })
   const text = await res.text()
   if (!res.ok) throw new ClickHouseError(text.slice(0, 2000), sql)
