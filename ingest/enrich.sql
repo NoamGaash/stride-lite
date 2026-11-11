@@ -105,6 +105,20 @@ WHERE vehicle_location_longitude != '' AND vehicle_location_latitude != ''
   AND siri_snapshot_id NOT IN (
       SELECT snapshot_id FROM siri_snapshot
       WHERE id IN (SELECT siri_snapshot_id FROM siri_snapshot_enriched FINAL)
+  )
+  -- The NOT IN alone does not prune: ClickHouse cannot use that nested set for
+  -- the partition key and silently reads every part, which on the node was the
+  -- whole landing table (a billion rows) on every step, every minute. A scalar
+  -- lower bound is known before index analysis, and the partition key's minmax
+  -- then skips every part older than the oldest pending snapshot. Nothing
+  -- pending gives a bound above every id, so a no-op refresh reads nothing.
+  AND siri_snapshot_id >= (
+      SELECT if(count() = 0, '9999', min(siri_snapshot_id))
+      FROM siri_snapshot_seen
+      WHERE siri_snapshot_id NOT IN (
+          SELECT snapshot_id FROM siri_snapshot
+          WHERE id IN (SELECT siri_snapshot_id FROM siri_snapshot_enriched FINAL)
+      )
   );
 
 -- The dimensions. Small enough that `NOT IN` over the whole table is a
