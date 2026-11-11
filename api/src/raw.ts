@@ -321,7 +321,7 @@ export const rawEndpoints: RawEndpointDef[] = [
           throw new BadRequest('too many items in list, maximum allowed is 1000 items')
         if (list.length)
           wheres.push(
-            `srs.siri_ride_id IN (SELECT id FROM ${db}.siri_ride\n               WHERE route_gtfs_ride_id IN (${list.map((v) => int(v, 'gtfs_ride_ids')).join(', ')}))`,
+            `srs.siri_ride_id IN (SELECT siri_ride_id FROM ${db}.siri_ride_gtfs\n               WHERE route_gtfs_ride_id IN (${list.map((v) => int(v, 'gtfs_ride_ids')).join(', ')}))`,
           )
       }
       // Written as a prefiltered IN rather than upstream's join tree, because

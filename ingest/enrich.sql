@@ -172,8 +172,8 @@ FROM (
 WHERE snapshot_id NOT IN (SELECT snapshot_id FROM siri_snapshot);
 
 -- The ride. See rule 2 above for why scheduled_start_time is an argMin and not
--- a key column. The gtfs_* columns are the output of a separate enrichment that
--- joins rides to the GTFS schedule, and are left NULL here.
+-- a key column. The gtfs_* columns stay NULL: the match to the GTFS schedule is
+-- kept in siri_ride_gtfs, by enrich_gtfs_link_src below.
 CREATE OR REPLACE VIEW enrich_ride_src AS
 WITH fresh AS (
     SELECT

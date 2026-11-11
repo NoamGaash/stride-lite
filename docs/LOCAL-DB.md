@@ -63,6 +63,8 @@ enrichment:
 ./clickhouse client --database stride --multiquery < db/raw.sql
 ./clickhouse client --database stride --multiquery < ingest/siri.sql
 ./clickhouse client --database stride --multiquery < ingest/enrich.sql
+./clickhouse client --database stride --multiquery < ingest/gtfs-link.sql
+./clickhouse client --database stride --multiquery < ingest/duration-history.sql
 ```
 
 From there the database keeps itself current: the feed lands in

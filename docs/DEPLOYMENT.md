@@ -600,7 +600,7 @@ the state file on the data volume says it finished:
 | --- | --- |
 | `history` | everything up to the dump's last day: `RESTORE` from our own S3 copy if there is one, otherwise stream the public dump |
 | `gtfs` | yesterday's feed, which the dump's GTFS tables stop short of |
-| `live` | `ingest/siri.sql`, `ingest/enrich.sql`, `ingest/health.sql` — the chain that keeps it current from here |
+| `live` | `ingest/siri.sql`, `ingest/enrich.sql`, `ingest/gtfs-link.sql`, `ingest/duration-history.sql`, `ingest/health.sql` — the chain that keeps it current from here |
 | `backfill` | `ingest/backfill-range.sh` from the history watermark to today |
 | `publish` | `BACKUP` to our own bucket, so no later instance repeats the public rebuild |
 

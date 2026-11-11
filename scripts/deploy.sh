@@ -45,6 +45,8 @@ if flock -w 600 9; then
             WHERE database = '$CH_DB' AND startsWith(view, 'enrich_')")" != 0 ]; then
     clickhouse client --database "$CH_DB" --multiquery < ingest/siri.sql
     clickhouse client --database "$CH_DB" --multiquery < ingest/enrich.sql
+    clickhouse client --database "$CH_DB" --multiquery < ingest/gtfs-link.sql
+    clickhouse client --database "$CH_DB" --multiquery < ingest/duration-history.sql
     clickhouse client --database "$CH_DB" --multiquery < ingest/health.sql
   else
     echo "the enrichment chain is not installed yet; first-load.sh owns that"

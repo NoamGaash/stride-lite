@@ -447,7 +447,8 @@ is argued in [ROADMAP.md](ROADMAP.md).
 ```
 up.sh             one command: binary, server, schema, ingest, enrichment, API
 db/schema.sql     the 16 tables, dumped from the running instance
-ingest/           siri.sql (ingest), enrich.sql (6-step chain), backfill.sh, local.xml
+ingest/           siri.sql (ingest), enrich.sql (6-step chain), gtfs-link.sql (SIRI → GTFS),
+                  duration-history.sql (past durations), backfill.sh, local.xml
 api/              TypeScript service — src/{sql,registry,server,ch}.ts
 infra/main.tf     Terraform module
 scripts/          apply-schema.sh, load-from-dump.sh

@@ -55,3 +55,15 @@ get_count: true
 HTTP 200
 [Asserts]
 body toInt > 100
+
+# A ride linked to its GTFS ride, by journey and by start time alike.
+GET {{api}}/siri_rides/list
+[Query]
+journey_refs: 2025-03-14-584623170
+HTTP 200
+[Asserts]
+jsonpath "$" count == 1
+jsonpath "$[0].gtfs_ride__journey_ref" == "584623170_140325"
+jsonpath "$[0].gtfs_route__line_ref" == 8515
+jsonpath "$[0].journey_gtfs_ride_id" == 29926
+jsonpath "$[0].gtfs_ride_id" == 29926
