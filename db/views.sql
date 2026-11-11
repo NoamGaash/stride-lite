@@ -59,7 +59,7 @@ FROM (
     FROM gtfs_ride AS gr
     LEFT JOIN (
         SELECT scheduled_time_gtfs_ride_id AS rid, count() AS n
-        FROM siri_ride_gtfs FINAL
+        FROM siri_ride_gtfs
         WHERE scheduled_time_gtfs_ride_id IS NOT NULL
         GROUP BY rid
     ) AS s ON gr.id = s.rid

@@ -393,17 +393,14 @@ HAVING max(recorded_at_time) < {settled_before:DateTime}
 -- "The ride's day" is the UTC date of its scheduled start, because that is what
 -- production's date_trunc gives on its UTC database. Where production takes
 -- whichever row its UPDATE ... FROM meets first, this takes the nearest start
--- and then the lowest id, so the answer is at least stable.
+-- and then the lowest id, so the answer is at least stable. Production also
+-- links only a ride whose duration it has measured; this links every ride,
+-- because the match reads nothing that changes after the ride is created.
 --
 -- Written to siri_ride_gtfs, a table of its own like siri_ride_duration,
--- because siri_ride is only ever appended to. A ride gets its row once the GTFS
--- of its day is loaded: written earlier, it would be recorded as unmatched for
--- good. The next day's GTFS can still arrive later and add a scheduled-time
--- match, so ingest/gtfs.sh deletes and relinks the rides around a day it loads.
--- ReplacingMergeTree is for the hourly view and gtfs.sh racing on a ride: both
--- write the same row.
+-- because siri_ride is only ever appended to.
 --
--- Takes the rides by the date their journey_ref starts with, which the
+-- Rides are taken by the date their journey_ref starts with, which the
 -- by_natural_key projection on siri_ride is sorted by; scheduled_start_time has
 -- no index. The id bounds turn that into a primary-key range on siri_ride.
 CREATE OR REPLACE VIEW enrich_gtfs_link_src AS
@@ -427,9 +424,6 @@ WITH
         WHERE r.id BETWEEN ids.1 AND ids.2
           AND r.journey_ref >= lo AND r.journey_ref < hi
           AND r.scheduled_start_time IS NOT NULL
-          -- Production links only a ride whose duration it has measured.
-          AND r.id IN (SELECT siri_ride_id FROM siri_ride_duration
-                       WHERE siri_ride_id BETWEEN ids.1 AND ids.2)
           AND r.id NOT IN (SELECT siri_ride_id FROM siri_ride_gtfs
                            WHERE siri_ride_id BETWEEN ids.1 AND ids.2)
           AND toDate(r.scheduled_start_time, 'UTC') IN loaded
@@ -472,6 +466,7 @@ WITH
         GROUP BY siri_ride_id
     )
 SELECT r.siri_ride_id AS siri_ride_id,
+       toDate(substring(r.journey_ref, 1, 10)) AS journey_date,
        j.gtfs_ride_id AS journey_gtfs_ride_id,
        l.route_gtfs_ride_id AS route_gtfs_ride_id,
        coalesce(j.gtfs_ride_id, l.route_gtfs_ride_id) AS gtfs_ride_id,
@@ -522,10 +517,30 @@ SELECT * FROM enrich_duration_src(
     to = now(),
     settled_before = now() - INTERVAL 6 HOUR);
 
--- Hourly, after the durations it requires. Three days back, because a ride
--- waits for its duration and for the GTFS of its day; older days are linked by
--- ingest/gtfs.sh when it loads their GTFS, and by ingest/link-gtfs.sh.
+-- One journey date per refresh, newest first, which also walks back through
+-- history on its own. A date is taken once it is final:
+--
+--   * its rides' scheduled starts fall on it or, in UTC, the day before, and a
+--     scheduled-time match may sit on the next day's GTFS, so all three days
+--     of GTFS are loaded;
+--   * every snapshot its rides can appear in has been enriched, which is true
+--     once a snapshot two days later has;
+--   * SIRI ran that day. A date whose rides all went unmatched still has rows,
+--     so this is what keeps the view from choosing an empty date forever.
+--
+-- A date is done once siri_ride_gtfs holds rows for it. Linking waits for the
+-- next day's GTFS, so yesterday's rides are linked the morning after.
 CREATE OR REPLACE MATERIALIZED VIEW enrich_gtfs_link
-REFRESH EVERY 1 HOUR DEPENDS ON enrich_duration
+REFRESH EVERY 5 MINUTE
 APPEND TO siri_ride_gtfs AS
-SELECT * FROM enrich_gtfs_link_src(from = today() - 3, to = today());
+WITH
+    (SELECT groupUniqArray(assumeNotNull(date)) FROM gtfs_route WHERE date IS NOT NULL) AS gtfs,
+    (SELECT toDate(replaceAll(substring(max(snapshot_id), 1, 10), '/', '-'))
+     FROM siri_snapshot) AS enriched_to,
+    (SELECT maxOrNull(d)
+     FROM (SELECT DISTINCT toDate(replaceAll(substring(siri_snapshot_id, 1, 10), '/', '-')) AS d
+           FROM siri_snapshot_seen)
+     WHERE has(gtfs, d - 1) AND has(gtfs, d) AND has(gtfs, d + 1)
+       AND d + 2 <= enriched_to
+       AND d NOT IN (SELECT DISTINCT journey_date FROM siri_ride_gtfs)) AS next_date
+SELECT * FROM enrich_gtfs_link_src(from = ifNull(next_date, toDate(0)), to = ifNull(next_date, toDate(0)));

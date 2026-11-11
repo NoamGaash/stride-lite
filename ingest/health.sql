@@ -46,7 +46,7 @@ FROM
 (
     SELECT count() AS n,
            countIf(id IN (SELECT siri_ride_id FROM siri_ride_duration)) AS measured,
-           countIf(id IN (SELECT siri_ride_id FROM siri_ride_gtfs FINAL
+           countIf(id IN (SELECT siri_ride_id FROM siri_ride_gtfs
                           WHERE scheduled_time_gtfs_ride_id IS NOT NULL)) AS linked
     FROM siri_ride
     WHERE scheduled_start_time >= toDateTime({day:Date})
