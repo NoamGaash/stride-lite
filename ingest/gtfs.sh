@@ -87,7 +87,7 @@ missing=$($CH --database "$CH_DB" --query "
     FROM siri_snapshot_seen
     UNION DISTINCT SELECT today())
   WHERE d NOT IN (SELECT DISTINCT assumeNotNull(date) FROM gtfs_route WHERE date IS NOT NULL)
-  ORDER BY d
+  ORDER BY d DESC
   FORMAT TSV" </dev/null)
 [ -n "$missing" ] || { echo "== up to date"; exit 0; }
 echo "== $(echo "$missing" | wc -l) days with no GTFS, loading at most $MAX_DAYS"
