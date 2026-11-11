@@ -64,6 +64,12 @@ load_day() {
   echo "== deriving"
   $CH --database "$CH_DB" --param_date="$date_iso" --multiquery < ingest/gtfs.sql
 
+  # A ride is linked once the GTFS of its day is in, so loading a day late is
+  # what links that day's rides; the day before gains its after-midnight
+  # scheduled-time matches. See enrich_gtfs_link_src.
+  echo "== linking SIRI rides"
+  ./ingest/link-gtfs.sh "$(date -u -d "$date_iso -1 day" +%F)" "$(date -u -d "$date_iso +1 day" +%F)" relink
+
   $CH --database "$CH_DB" --param_date="$date_iso" --query "
   SELECT
       (SELECT count() FROM gtfs_route WHERE date = {date:Date}) AS routes,

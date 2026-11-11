@@ -82,8 +82,9 @@ load() {
     ch --query "INSERT INTO $(basename "$f" .native) FROM INFILE '$f' FORMAT Native"
   done
   rm -rf "$tmp"
-  # Derived, so measured here rather than shipped: computed before the cut it
-  # would describe the whole day and not the rows the fixture holds.
+  # Derived, so computed here rather than shipped: computed before the cut,
+  # each would describe the whole day and not the rows the fixture holds.
+  ch --param_day="$DAY" --query "INSERT INTO siri_ride_gtfs SELECT * FROM enrich_gtfs_link_src(from = {day:Date} - 1, to = {day:Date} + 1)"
   ch --param_day="$DAY" --query "INSERT INTO ingest_day_health SELECT * FROM ingest_day_health_src(day = {day:Date})"
   # gtfs_rides_agg_by_hour is derived and not shipped: refreshing it here is
   # what ingest would do, and it then holds exactly the fixture's operators.

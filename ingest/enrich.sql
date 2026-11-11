@@ -172,8 +172,8 @@ FROM (
 WHERE snapshot_id NOT IN (SELECT snapshot_id FROM siri_snapshot);
 
 -- The ride. See rule 2 above for why scheduled_start_time is an argMin and not
--- a key column. The gtfs_* columns are the output of a separate enrichment that
--- joins rides to the GTFS schedule, and are left NULL here.
+-- a key column. The gtfs_* columns stay NULL: the match to the GTFS schedule is
+-- kept in siri_ride_gtfs, by enrich_gtfs_link_src below.
 CREATE OR REPLACE VIEW enrich_ride_src AS
 WITH fresh AS (
     SELECT
@@ -374,6 +374,112 @@ HAVING max(recorded_at_time) < {settled_before:DateTime}
    AND min(recorded_at_time) >= {from:DateTime}
    AND siri_ride_id NOT IN done;
 
+-- Which GTFS ride each SIRI ride ran, decided as production decides it in
+-- open-bus-stride-etl's siri/update_rides_gtfs.py:
+--
+--   journey_gtfs_ride_id         the GTFS ride whose journey_ref is the SIRI
+--                                one rewritten (2025-03-14-17336336 is
+--                                17336336_140325), on a GTFS route of the
+--                                ride's day.
+--   route_gtfs_ride_id           a GTFS ride of the same operator and line, on
+--                                the ride's day, starting less than 1, else 3,
+--                                else 5 minutes from the SIRI scheduled start.
+--   gtfs_ride_id                 the journey match if there is one, else the
+--                                route match.
+--   scheduled_time_gtfs_ride_id  a GTFS ride of the same operator and line, on
+--                                the ride's day or the next, starting exactly
+--                                at the SIRI scheduled start.
+--
+-- "The ride's day" is the UTC date of its scheduled start, because that is what
+-- production's date_trunc gives on its UTC database. Where production takes
+-- whichever row its UPDATE ... FROM meets first, this takes the nearest start
+-- and then the lowest id, so the answer is at least stable.
+--
+-- Written to siri_ride_gtfs, a table of its own like siri_ride_duration,
+-- because siri_ride is only ever appended to. A ride gets its row once the GTFS
+-- of its day is loaded: written earlier, it would be recorded as unmatched for
+-- good. The next day's GTFS can still arrive later and add a scheduled-time
+-- match, so ingest/gtfs.sh deletes and relinks the rides around a day it loads.
+-- ReplacingMergeTree is for the hourly view and gtfs.sh racing on a ride: both
+-- write the same row.
+--
+-- Takes the rides by the date their journey_ref starts with, which the
+-- by_natural_key projection on siri_ride is sorted by; scheduled_start_time has
+-- no index. The id bounds turn that into a primary-key range on siri_ride.
+CREATE OR REPLACE VIEW enrich_gtfs_link_src AS
+WITH
+    toString({from:Date}) AS lo,
+    toString({to:Date} + 1) AS hi,
+    (SELECT (min(id), max(id)) FROM siri_ride WHERE journey_ref >= lo AND journey_ref < hi) AS ids,
+    loaded AS (
+        SELECT DISTINCT date FROM gtfs_route
+        WHERE date BETWEEN {from:Date} - 1 AND {to:Date} + 1
+    ),
+    rides AS (
+        SELECT r.id AS siri_ride_id,
+               r.journey_ref AS journey_ref,
+               assumeNotNull(r.scheduled_start_time) AS scheduled_start_time,
+               toDate(r.scheduled_start_time, 'UTC') AS day,
+               sr.operator_ref AS operator_ref,
+               sr.line_ref AS line_ref
+        FROM siri_ride AS r
+        INNER JOIN siri_route AS sr ON sr.id = r.siri_route_id
+        WHERE r.id BETWEEN ids.1 AND ids.2
+          AND r.journey_ref >= lo AND r.journey_ref < hi
+          AND r.scheduled_start_time IS NOT NULL
+          -- Production links only a ride whose duration it has measured.
+          AND r.id IN (SELECT siri_ride_id FROM siri_ride_duration
+                       WHERE siri_ride_id BETWEEN ids.1 AND ids.2)
+          AND r.id NOT IN (SELECT siri_ride_id FROM siri_ride_gtfs
+                           WHERE siri_ride_id BETWEEN ids.1 AND ids.2)
+          AND toDate(r.scheduled_start_time, 'UTC') IN loaded
+    ),
+    planned AS (
+        SELECT g.id AS gtfs_ride_id,
+               g.journey_ref AS journey_ref,
+               g.start_time AS start_time,
+               gr.date AS day,
+               gr.operator_ref AS operator_ref,
+               gr.line_ref AS line_ref
+        FROM gtfs_ride AS g
+        INNER JOIN gtfs_route AS gr ON gr.id = g.gtfs_route_id
+        WHERE g.gtfs_route_id IN (SELECT id FROM gtfs_route
+                                  WHERE date BETWEEN {from:Date} - 1 AND {to:Date} + 2)
+    ),
+    by_journey AS (
+        SELECT r.siri_ride_id AS siri_ride_id, toNullable(min(p.gtfs_ride_id)) AS gtfs_ride_id
+        FROM rides AS r
+        INNER JOIN planned AS p
+            ON p.journey_ref = concat(splitByChar('-', r.journey_ref)[4], '_',
+                                      splitByChar('-', r.journey_ref)[3],
+                                      splitByChar('-', r.journey_ref)[2],
+                                      substring(splitByChar('-', r.journey_ref)[1], 3))
+           AND p.day = r.day
+        GROUP BY siri_ride_id
+    ),
+    by_line AS (
+        SELECT r.siri_ride_id AS siri_ride_id,
+               argMinIfOrNull(p.gtfs_ride_id,
+                   (abs(dateDiff('second', p.start_time, r.scheduled_start_time)), p.gtfs_ride_id),
+                   p.day = r.day
+                   AND abs(dateDiff('second', p.start_time, r.scheduled_start_time)) < 300) AS route_gtfs_ride_id,
+               minIfOrNull(p.gtfs_ride_id,
+                   p.start_time = r.scheduled_start_time
+                   AND p.day BETWEEN r.day AND r.day + 1) AS scheduled_time_gtfs_ride_id
+        FROM rides AS r
+        INNER JOIN planned AS p
+            ON p.operator_ref = r.operator_ref AND p.line_ref = r.line_ref
+        GROUP BY siri_ride_id
+    )
+SELECT r.siri_ride_id AS siri_ride_id,
+       j.gtfs_ride_id AS journey_gtfs_ride_id,
+       l.route_gtfs_ride_id AS route_gtfs_ride_id,
+       coalesce(j.gtfs_ride_id, l.route_gtfs_ride_id) AS gtfs_ride_id,
+       l.scheduled_time_gtfs_ride_id AS scheduled_time_gtfs_ride_id
+FROM rides AS r
+LEFT JOIN by_journey AS j ON j.siri_ride_id = r.siri_ride_id
+LEFT JOIN by_line AS l ON l.siri_ride_id = r.siri_ride_id;
+
 -- The chain. DEPENDS ON is what orders it: a step refreshes only after the one
 -- it reads from has finished, so a ride never looks for a route that is not
 -- there yet. APPEND is load-bearing — without it a refreshable view REPLACES
@@ -415,3 +521,11 @@ SELECT * FROM enrich_duration_src(
     from = now() - INTERVAL 36 HOUR,
     to = now(),
     settled_before = now() - INTERVAL 6 HOUR);
+
+-- Hourly, after the durations it requires. Three days back, because a ride
+-- waits for its duration and for the GTFS of its day; older days are linked by
+-- ingest/gtfs.sh when it loads their GTFS, and by ingest/link-gtfs.sh.
+CREATE OR REPLACE MATERIALIZED VIEW enrich_gtfs_link
+REFRESH EVERY 1 HOUR DEPENDS ON enrich_duration
+APPEND TO siri_ride_gtfs AS
+SELECT * FROM enrich_gtfs_link_src(from = today() - 3, to = today());

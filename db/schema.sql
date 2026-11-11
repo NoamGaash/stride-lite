@@ -169,6 +169,18 @@ ENGINE = MergeTree
 ORDER BY siri_ride_id
 ;
 
+CREATE TABLE stride.siri_ride_gtfs
+(
+    `siri_ride_id` Int32,
+    `journey_gtfs_ride_id` Nullable(Int32),
+    `route_gtfs_ride_id` Nullable(Int32),
+    `gtfs_ride_id` Nullable(Int32),
+    `scheduled_time_gtfs_ride_id` Nullable(Int32)
+)
+ENGINE = ReplacingMergeTree
+ORDER BY siri_ride_id
+;
+
 CREATE TABLE stride.siri_ride
 (
     `id` Int32,

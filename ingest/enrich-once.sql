@@ -31,6 +31,11 @@ SELECT * FROM enrich_duration_src(
     to = toDateTime({day:Date}) + INTERVAL 30 HOUR,
     settled_before = toDateTime({day:Date}) + INTERVAL 24 HOUR);
 
+-- The GTFS rides the day's rides ran, from the day before on for the rides
+-- whose durations the previous day's run left to this one.
+INSERT INTO siri_ride_gtfs
+SELECT * FROM enrich_gtfs_link_src(from = {day:Date} - 1, to = {day:Date});
+
 -- What the day turned out to be worth, recorded where the API can serve it.
--- Last, so it measures the rows the six steps above just wrote.
+-- Last, so it measures the rows the steps above just wrote.
 INSERT INTO ingest_day_health SELECT * FROM ingest_day_health_src(day = {day:Date});

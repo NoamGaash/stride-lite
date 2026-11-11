@@ -12,6 +12,9 @@ jsonpath "$[0].operator_ref" == 34
 jsonpath "$[3].operator_ref" == 51
 jsonpath "$[*].operator_ref" contains 34
 jsonpath "$[?(@.total_planned_rides <= 0)]" not exists
+# Executed rides come from enrich_gtfs_link_src. Production never linked
+# Pi Day, so these are ours: 231 is what the fixture's rides link to.
+jsonpath "$[0].total_actual_rides" == 231
 
 GET {{api}}/gtfs_rides_agg/group_by
 [Query]

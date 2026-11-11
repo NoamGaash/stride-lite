@@ -17,6 +17,9 @@ const MEASURED = [
   'duration_minutes',
 ]
 
+/** Where a ride's GTFS match comes from. See enrich_gtfs_link_src. */
+const LINKS = ['journey_gtfs_ride_id', 'route_gtfs_ride_id', 'gtfs_ride_id']
+
 export const endpoints: EndpointDef[] = [
   {
     path: '/siri_routes/list',
@@ -156,6 +159,7 @@ export const endpoints: EndpointDef[] = [
       `INNER JOIN ${DB}.siri_ride AS r ON r.id = rs.siri_ride_id`,
       `INNER JOIN ${DB}.siri_route AS rt ON rt.id = r.siri_route_id`,
       `INNER JOIN ${DB}.siri_snapshot AS sn ON sn.id = vl.siri_snapshot_id`,
+      `LEFT JOIN ${DB}.siri_ride_gtfs AS lk ON lk.siri_ride_id = r.id`,
       // Last, for the join-order reason given on /siri_rides/list.
       `LEFT JOIN ${DB}.siri_ride_duration AS d ON d.siri_ride_id = r.id`,
     ],
@@ -165,8 +169,9 @@ export const endpoints: EndpointDef[] = [
       {
         prefix: 'siri_ride__',
         alias: 'r',
-        fields: ['id', 'journey_ref', 'scheduled_start_time', 'vehicle_ref', 'gtfs_ride_id'],
+        fields: ['id', 'journey_ref', 'scheduled_start_time', 'vehicle_ref'],
       },
+      { prefix: 'siri_ride__', alias: 'lk', fields: ['gtfs_ride_id'] },
       { prefix: 'siri_ride__', alias: 'd', fields: MEASURED },
     ],
     filters: [
@@ -232,7 +237,8 @@ export const endpoints: EndpointDef[] = [
     // written here costs it nothing — 0.559 s without it, 0.530 s with.
     joins: [
       `INNER JOIN ${DB}.siri_route AS sr ON sr.id = r.siri_route_id`,
-      `LEFT JOIN ${DB}.gtfs_ride AS gr ON gr.id = r.gtfs_ride_id`,
+      `LEFT JOIN ${DB}.siri_ride_gtfs AS lk ON lk.siri_ride_id = r.id`,
+      `LEFT JOIN ${DB}.gtfs_ride AS gr ON gr.id = lk.gtfs_ride_id`,
       `LEFT JOIN ${DB}.gtfs_route AS grt ON grt.id = gr.gtfs_route_id`,
       // Last on purpose. ClickHouse joins in the order written, and this one
       // placed before the gtfs joins took an hour's page from 0.530 s to
@@ -247,13 +253,11 @@ export const endpoints: EndpointDef[] = [
       'vehicle_ref',
       'updated_first_last_vehicle_locations',
       'updated_duration_minutes',
-      'journey_gtfs_ride_id',
-      'route_gtfs_ride_id',
-      'gtfs_ride_id',
     ],
-    // `scheduled_time_gtfs_ride_id` is a column of the table but not of the
-    // pydantic model, so it is absent from the response.
+    // `scheduled_time_gtfs_ride_id` is a column of siri_ride_gtfs but not of
+    // the pydantic model, so it is absent from the response.
     related: [
+      { prefix: '', alias: 'lk', fields: LINKS },
       { prefix: '', alias: 'd', fields: MEASURED },
       { prefix: 'siri_route__', alias: 'sr', fields: ['line_ref', 'operator_ref'] },
       {
@@ -336,7 +340,7 @@ export const endpoints: EndpointDef[] = [
       scheduled_start_time: 'r.scheduled_start_time',
       vehicle_ref: 'r.vehicle_ref',
       duration_minutes: 'd.duration_minutes',
-      gtfs_ride_id: 'r.gtfs_ride_id',
+      gtfs_ride_id: 'lk.gtfs_ride_id',
     },
   },
   {
@@ -532,17 +536,20 @@ export const endpoints: EndpointDef[] = [
       `LEFT JOIN (SELECT * FROM ${DB}.siri_vehicle_location WHERE id IN (
           SELECT nearest_siri_vehicle_location_id FROM ${DB}.siri_ride_stop WHERE __BASE_WHERE__
         )) AS vl ON vl.id = rs.nearest_siri_vehicle_location_id`,
+      `LEFT JOIN (SELECT * FROM ${DB}.siri_ride_gtfs WHERE siri_ride_id IN (
+          SELECT siri_ride_id FROM ${DB}.siri_ride_stop WHERE __BASE_WHERE__
+        )) AS lk ON lk.siri_ride_id = rs.siri_ride_id`,
       `LEFT JOIN (SELECT * FROM ${DB}.gtfs_ride WHERE id IN (
-          SELECT gtfs_ride_id FROM ${DB}.siri_ride WHERE id IN (
+          SELECT gtfs_ride_id FROM ${DB}.siri_ride_gtfs WHERE siri_ride_id IN (
             SELECT siri_ride_id FROM ${DB}.siri_ride_stop WHERE __BASE_WHERE__
           )
-        )) AS gr ON gr.id = sr.gtfs_ride_id`,
+        )) AS gr ON gr.id = lk.gtfs_ride_id`,
       `LEFT JOIN (SELECT * FROM ${DB}.gtfs_ride_stop WHERE gtfs_stop_id IN (
           SELECT gtfs_stop_id FROM ${DB}.siri_ride_stop WHERE __BASE_WHERE__
         )) AS grs ON grs.gtfs_stop_id = gs.id AND grs.gtfs_ride_id = gr.id`,
       `LEFT JOIN (SELECT * FROM ${DB}.gtfs_route WHERE id IN (
           SELECT gtfs_route_id FROM ${DB}.gtfs_ride WHERE id IN (
-            SELECT gtfs_ride_id FROM ${DB}.siri_ride WHERE id IN (
+            SELECT gtfs_ride_id FROM ${DB}.siri_ride_gtfs WHERE siri_ride_id IN (
               SELECT siri_ride_id FROM ${DB}.siri_ride_stop WHERE __BASE_WHERE__
             )
           )
@@ -572,11 +579,9 @@ export const endpoints: EndpointDef[] = [
           'vehicle_ref',
           'updated_first_last_vehicle_locations',
           'updated_duration_minutes',
-          'journey_gtfs_ride_id',
-          'route_gtfs_ride_id',
-          'gtfs_ride_id',
         ],
       },
+      { prefix: 'siri_ride__', alias: 'lk', fields: LINKS },
       { prefix: 'siri_ride__', alias: 'd', fields: MEASURED },
       { prefix: 'gtfs_stop__', alias: 'gs', fields: ['date', 'code', 'lat', 'lon', 'name', 'city'] },
       {
@@ -774,7 +779,10 @@ export const getEndpoints: {
     path: '/siri_rides/get',
     table: `${DB}.siri_ride`,
     alias: 'r',
-    joins: [`LEFT JOIN ${DB}.siri_ride_duration AS d ON d.siri_ride_id = r.id`],
+    joins: [
+      `LEFT JOIN ${DB}.siri_ride_gtfs AS lk ON lk.siri_ride_id = r.id`,
+      `LEFT JOIN ${DB}.siri_ride_duration AS d ON d.siri_ride_id = r.id`,
+    ],
     fields: [
       'id',
       'siri_route_id',
@@ -783,11 +791,11 @@ export const getEndpoints: {
       'vehicle_ref',
       'updated_first_last_vehicle_locations',
       'updated_duration_minutes',
-      'journey_gtfs_ride_id',
-      'route_gtfs_ride_id',
-      'gtfs_ride_id',
     ],
-    related: [{ alias: 'd', fields: MEASURED }],
+    related: [
+      { alias: 'lk', fields: LINKS },
+      { alias: 'd', fields: MEASURED },
+    ],
   },
   {
     // `order` is a reserved word, which is why every field here is quoted.
