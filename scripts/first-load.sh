@@ -206,6 +206,8 @@ load_history() {
 install_live_chain() {
   ch --multiquery < ingest/siri.sql
   ch --multiquery < ingest/enrich.sql
+  ch --multiquery < ingest/gtfs-link.sql
+  ch --multiquery < ingest/duration-history.sql
   ch --multiquery < ingest/health.sql
   echo "refreshable views created; they schedule themselves from here"
 }

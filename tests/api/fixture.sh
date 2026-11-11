@@ -33,7 +33,7 @@ without_refresh() {
 schema() {
   $CH --query "DROP DATABASE IF EXISTS $CH_DB" </dev/null
   CH_DB="$CH_DB" CH_CLIENT="$CH" PROJECTIONS=0 ./scripts/apply-schema.sh >/dev/null
-  without_refresh ingest/siri.sql ingest/enrich.sql ingest/health.sql \
+  without_refresh ingest/siri.sql ingest/enrich.sql ingest/gtfs-link.sql ingest/duration-history.sql ingest/health.sql \
     | $CH --database "$CH_DB" --multiquery
 }
 

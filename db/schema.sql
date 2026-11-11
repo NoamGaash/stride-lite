@@ -169,6 +169,17 @@ ENGINE = MergeTree
 ORDER BY siri_ride_id
 ;
 
+-- The days a history backfill has done, one row per day under the backfill's
+-- own name, so a new backfill needs no table of its own.
+CREATE TABLE stride.backfill_progress
+(
+    `step` LowCardinality(String),
+    `day` Date
+)
+ENGINE = MergeTree
+ORDER BY (step, day)
+;
+
 CREATE TABLE stride.siri_ride_gtfs
 (
     `siri_ride_id` Int32,
