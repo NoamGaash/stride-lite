@@ -380,14 +380,19 @@ HAVING max(recorded_at_time) < {settled_before:DateTime}
 -- copy of its data has a hole the hourly enrich_duration never looks back at.
 -- A day is taken once the live window has passed it; rides it already measured
 -- are skipped by enrich_duration_src itself, so a day with no hole costs one
--- read of its locations. Each day is recorded in siri_ride_duration_days once
--- its refresh has run.
-CREATE TABLE IF NOT EXISTS siri_ride_duration_days
+-- read of its locations. Each day is recorded in backfill_progress once its
+-- refresh has run.
+--
+-- backfill_progress is shared: any step that walks back through history a day
+-- at a time records its days there under its own name, rather than in a table
+-- of its own.
+CREATE TABLE IF NOT EXISTS backfill_progress
 (
+    step LowCardinality(String),
     day Date
 )
 ENGINE = MergeTree
-ORDER BY day;
+ORDER BY (step, day);
 
 CREATE OR REPLACE VIEW duration_history_next_day AS
 SELECT maxOrNull(d) AS day
@@ -397,7 +402,7 @@ FROM (
 )
 WHERE d <= (SELECT toDate(replaceAll(substring(max(snapshot_id), 1, 10), '/', '-'))
             FROM siri_snapshot) - 2
-  AND d NOT IN (SELECT day FROM siri_ride_duration_days);
+  AND d NOT IN (SELECT day FROM backfill_progress WHERE step = 'duration');
 
 -- Which GTFS ride each SIRI ride ran, decided as production decides it in
 -- open-bus-stride-etl's siri/update_rides_gtfs.py:
@@ -582,5 +587,5 @@ SELECT * FROM enrich_duration_src(
 
 CREATE OR REPLACE MATERIALIZED VIEW enrich_duration_history_done
 REFRESH EVERY 2 MINUTE DEPENDS ON enrich_duration_history
-APPEND TO siri_ride_duration_days AS
-SELECT day FROM duration_history_next_day WHERE day IS NOT NULL;
+APPEND TO backfill_progress AS
+SELECT 'duration' AS step, day FROM duration_history_next_day WHERE day IS NOT NULL;
