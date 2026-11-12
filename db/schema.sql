@@ -285,7 +285,8 @@ CREATE TABLE stride.siri_vehicle_location
     `velocity` Nullable(Int32),
     `distance_from_journey_start` Nullable(Int32),
     `distance_from_siri_ride_stop_meters` Nullable(Int32),
-    INDEX id_minmax id TYPE minmax GRANULARITY 4
+    INDEX id_minmax id TYPE minmax GRANULARITY 4,
+    INDEX ride_stop_minmax siri_ride_stop_id TYPE minmax GRANULARITY 4
 )
 ENGINE = MergeTree
 ORDER BY (recorded_at_time, id)
