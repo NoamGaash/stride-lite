@@ -1,4 +1,10 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
+import {
+  ClickHouseError as OfficialError,
+  ClickHouseLogLevel,
+  createClient,
+  type ClickHouseSettings,
+} from '@clickhouse/client'
 
 const CH_URL = process.env.CH_URL ?? 'http://127.0.0.1:8123'
 const CH_USER = process.env.CH_USER ?? 'default'
@@ -25,16 +31,30 @@ export const MAX_QUERY_BYTES = Number(process.env.CH_MAX_QUERY_BYTES ?? 1.5 * 10
  */
 export const requestSignal = new AsyncLocalStorage<AbortSignal>()
 
-export function queryUrl(base = CH_URL): string {
-  const url = new URL(base)
-  url.searchParams.set('max_execution_time', String(MAX_QUERY_SECONDS))
-  url.searchParams.set('max_memory_usage', String(MAX_QUERY_BYTES))
-  url.searchParams.set('max_bytes_before_external_group_by', String(MAX_QUERY_BYTES / 2))
-  url.searchParams.set('max_bytes_before_external_sort', String(MAX_QUERY_BYTES / 2))
-  url.searchParams.set('readonly', '2')
-  url.searchParams.set('cancel_http_readonly_queries_on_client_close', '1')
-  return url.toString()
-}
+export const QUERY_SETTINGS = {
+  max_execution_time: MAX_QUERY_SECONDS,
+  max_memory_usage: String(MAX_QUERY_BYTES),
+  max_bytes_before_external_group_by: String(MAX_QUERY_BYTES / 2),
+  max_bytes_before_external_sort: String(MAX_QUERY_BYTES / 2),
+  readonly: '2',
+  cancel_http_readonly_queries_on_client_close: 1,
+} satisfies ClickHouseSettings
+
+/**
+ * Past ClickHouse's own limit, so a slow query ends with its TIMEOUT_EXCEEDED
+ * rather than with the client hanging up first and saying only that it did.
+ */
+export const REQUEST_TIMEOUT_MS = (MAX_QUERY_SECONDS + 5) * 1000
+
+export const client = createClient({
+  url: CH_URL,
+  username: CH_USER,
+  password: CH_PASSWORD,
+  request_timeout: REQUEST_TIMEOUT_MS,
+  // server.ts already reports each failure once; the client's own log would
+  // print every one again, at length.
+  log: { level: ClickHouseLogLevel.OFF },
+})
 
 export class ClickHouseError extends Error {
   constructor(
@@ -47,33 +67,44 @@ export class ClickHouseError extends Error {
 
 /** Runs a query and returns the rows as JSON objects. */
 export async function query<T = Record<string, unknown>>(sql: string): Promise<T[]> {
-  const body = await run(`${sql} FORMAT JSONEachRow`)
-  if (!body.trim()) return []
-  return body
-    .trimEnd()
-    .split('\n')
-    .map((line) => JSON.parse(line) as T)
+  return run(sql, 'JSONEachRow', (rows) => rows.json<T>())
 }
 
 /** Runs a query expected to yield a single scalar, e.g. a count. */
 export async function scalar(sql: string): Promise<string> {
-  return (await run(`${sql} FORMAT TabSeparated`)).trim()
+  return (await run(sql, 'TabSeparated', (rows) => rows.text())).trim()
 }
 
-async function run(sql: string): Promise<string> {
-  const res = await fetch(queryUrl(), {
-    method: 'POST',
-    headers: {
-      'X-ClickHouse-User': CH_USER,
-      'X-ClickHouse-Key': CH_PASSWORD,
-      'Content-Type': 'text/plain; charset=utf-8',
-    },
-    body: sql,
-    signal: requestSignal.getStore(),
-  })
-  const text = await res.text()
-  if (!res.ok) throw new ClickHouseError(text.slice(0, 2000), sql)
-  return text
+interface Rows {
+  json<T>(): Promise<T[]>
+  text(): Promise<string>
+}
+
+/**
+ * The body is read inside, because ClickHouse can fail a query after it has
+ * started streaming the answer, and that failure arrives with the body.
+ */
+async function run<R>(
+  sql: string,
+  format: 'JSONEachRow' | 'TabSeparated',
+  read: (rows: Rows) => Promise<R>,
+): Promise<R> {
+  const signal = requestSignal.getStore()
+  try {
+    const rows = await client.query({
+      query: sql,
+      format,
+      clickhouse_settings: QUERY_SETTINGS,
+      abort_signal: signal,
+    })
+    return await read(rows as unknown as Rows)
+  } catch (err) {
+    // The client words an abort as a plain Error; the signal's own reason is
+    // the AbortError that callers check for.
+    if (signal?.aborted) throw signal.reason
+    if (err instanceof OfficialError) throw new ClickHouseError(err.message.slice(0, 2000), sql)
+    throw err
+  }
 }
 
 /** Single-quoted SQL literal. ClickHouse escapes with backslashes. */
