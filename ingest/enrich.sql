@@ -102,9 +102,16 @@ WHERE vehicle_location_longitude != '' AND vehicle_location_latitude != ''
   -- each step, so a refresh costs what arrived since the last one instead of
   -- rereading the whole landing table. Without this a no-op refresh still took
   -- 2 m 33 s once the table held two hours of feed, and it would only grow.
+  --
+  -- The done set is a join and not `id IN (...)` inside the NOT IN: a set nested
+  -- in a set makes index analysis throw NOT_IMPLEMENTED ("Cannot clone a plan
+  -- holding a DelayedCreatingSets step"). ClickHouse catches it and answers
+  -- anyway, but without the scalar bound below: measured, 15,961,150 rows read
+  -- where the join form reads 80,697, for the same rows out.
   AND siri_snapshot_id NOT IN (
-      SELECT snapshot_id FROM siri_snapshot
-      WHERE id IN (SELECT siri_snapshot_id FROM siri_snapshot_enriched FINAL)
+      SELECT s.snapshot_id FROM siri_snapshot AS s
+      INNER JOIN (SELECT siri_snapshot_id FROM siri_snapshot_enriched FINAL) AS e
+          ON e.siri_snapshot_id = s.id
   )
   -- The NOT IN alone does not prune: ClickHouse cannot use that nested set for
   -- the partition key and silently reads every part, which on the node was the
@@ -116,8 +123,9 @@ WHERE vehicle_location_longitude != '' AND vehicle_location_latitude != ''
       SELECT if(count() = 0, '9999', min(siri_snapshot_id))
       FROM siri_snapshot_seen
       WHERE siri_snapshot_id NOT IN (
-          SELECT snapshot_id FROM siri_snapshot
-          WHERE id IN (SELECT siri_snapshot_id FROM siri_snapshot_enriched FINAL)
+          SELECT s.snapshot_id FROM siri_snapshot AS s
+          INNER JOIN (SELECT siri_snapshot_id FROM siri_snapshot_enriched FINAL) AS e
+              ON e.siri_snapshot_id = s.id
       )
   );
 
