@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MAX_QUERY_SECONDS, query, queryUrl, requestSignal } from '../src/ch'
+import { MAX_QUERY_BYTES, MAX_QUERY_SECONDS, query, queryUrl, requestSignal } from '../src/ch'
 
 afterEach(() => vi.unstubAllGlobals())
 
@@ -9,6 +9,12 @@ describe('queryUrl', () => {
   it('bounds every query by the time the CDN waits', () => {
     expect(params.get('max_execution_time')).toBe(String(MAX_QUERY_SECONDS))
     expect(MAX_QUERY_SECONDS).toBeLessThanOrEqual(30)
+  })
+
+  /** The node has 6.56 GiB for everything; a visitor's query must not take the enrichment's share. */
+  it('caps the memory of every query well below the server', () => {
+    expect(params.get('max_memory_usage')).toBe(String(MAX_QUERY_BYTES))
+    expect(MAX_QUERY_BYTES).toBeLessThanOrEqual(2 * 1024 ** 3)
   })
 
   /** Measured on 26.10: the cancel setting does nothing unless the query is read-only. */

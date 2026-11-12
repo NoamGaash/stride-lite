@@ -11,6 +11,14 @@ const CH_PASSWORD = process.env.CH_PASSWORD ?? ''
 export const MAX_QUERY_SECONDS = Number(process.env.CH_MAX_QUERY_SECONDS ?? 30)
 
 /**
+ * users.xml lets one query use 6 GB, which is the whole node: two heavy visitor
+ * queries at once left the enrichment no room, and enrich_route failed with
+ * MEMORY_LIMIT_EXCEEDED while allocating 7 MiB. A visitor's query is capped
+ * well below that and spills large GROUP BYs and sorts to disk before failing.
+ */
+export const MAX_QUERY_BYTES = Number(process.env.CH_MAX_QUERY_BYTES ?? 1.5 * 1024 ** 3)
+
+/**
  * The signal of the HTTP request being served. A visitor who leaves aborts the
  * fetch, which closes the connection, and ClickHouse then cancels the query:
  * only because it is read-only, which the API's queries all are.
@@ -20,6 +28,9 @@ export const requestSignal = new AsyncLocalStorage<AbortSignal>()
 export function queryUrl(base = CH_URL): string {
   const url = new URL(base)
   url.searchParams.set('max_execution_time', String(MAX_QUERY_SECONDS))
+  url.searchParams.set('max_memory_usage', String(MAX_QUERY_BYTES))
+  url.searchParams.set('max_bytes_before_external_group_by', String(MAX_QUERY_BYTES / 2))
+  url.searchParams.set('max_bytes_before_external_sort', String(MAX_QUERY_BYTES / 2))
   url.searchParams.set('readonly', '2')
   url.searchParams.set('cancel_http_readonly_queries_on_client_close', '1')
   return url.toString()
