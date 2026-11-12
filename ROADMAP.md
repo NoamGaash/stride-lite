@@ -26,7 +26,7 @@ Three, set at the start, unchanged since:
 | 2 | GTFS ingest — the blocking gap | GTFS tables in ClickHouse, both enrichment macros off `postgresql()` | **done** |
 | 3 | The remaining ETL processes | no Airflow, `system.view_refreshes` clean for 24 h | **done**, except a 24 h unattended run |
 | 4 | The TypeScript API | 27 of 27 endpoints identical to production | **done** |
-| 5 | Pricing and deployment | measured resources, priced under the $150/month target | **priced: $3.24/day, $98/month. Deployed** on AWS behind CloudFront, opt-in from the frontend |
+| 5 | Pricing and deployment | measured resources, priced under the $150/month target | **priced: $3.24/day, $98/month. Deployed** on AWS behind CloudFront; a frontend opt-in is in review (hasadna/open-bus-map-search#1929) |
 
 ### Stage 1 — done
 
