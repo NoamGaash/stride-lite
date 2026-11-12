@@ -7,6 +7,7 @@ import { buildQuery, BadRequest, BadInput, TzRequired, UnknownOrderField } from 
 import { endpoints, getEndpoints } from './registry'
 import { rawEndpoints, wrap, type RawEndpointDef } from './raw'
 import { coverageSql, statusSql } from './status'
+import { DOCS_HTML, loadSpec } from './openapi'
 import {
   memo,
   metricsSql,
@@ -18,6 +19,7 @@ import {
   UnknownSource,
 } from './ops'
 
+const SPEC = loadSpec(endpoints)
 const PORT = Number(process.env.PORT ?? 8080)
 const HOST = process.env.HOST ?? '0.0.0.0'
 
@@ -172,6 +174,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<unknow
 
   try {
     if (url.pathname === '/healthz') return await send(200, { ok: true })
+
+    if (url.pathname === '/openapi.json') return await send(200, SPEC)
+    if (url.pathname === '/docs') {
+      return await send(200, DOCS_HTML, { 'Content-Type': 'text/html; charset=utf-8' })
+    }
 
     // Public on purpose; see src/status.ts. Measured at 78 ms, and the CDN in
     // front caches it, so it is not a way to make the database work.
