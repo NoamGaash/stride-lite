@@ -65,14 +65,37 @@ export class ClickHouseError extends Error {
   }
 }
 
+/**
+ * The values a query is built from, sent beside its text rather than spliced
+ * into it: the SQL holds `{p0:String}` and ClickHouse binds the value itself,
+ * so nothing a visitor sends ever becomes SQL. Bound values are substituted
+ * before the query is analysed, so the primary key still prunes on them.
+ *
+ * Numbers are the exception. A builder writes one only after parsing it into a
+ * JavaScript number, so the SQL holds that number's own spelling and none of
+ * the visitor's text.
+ */
+export class Params {
+  readonly values: Record<string, unknown> = {}
+
+  bind(value: string | string[], type: string): string {
+    const name = `p${Object.keys(this.values).length}`
+    this.values[name] = value
+    return `{${name}:${type}}`
+  }
+}
+
 /** Runs a query and returns the rows as JSON objects. */
-export async function query<T = Record<string, unknown>>(sql: string): Promise<T[]> {
-  return run(sql, 'JSONEachRow', (rows) => rows.json<T>())
+export async function query<T = Record<string, unknown>>(
+  sql: string,
+  params: Record<string, unknown> = {},
+): Promise<T[]> {
+  return run(sql, params, 'JSONEachRow', (rows) => rows.json<T>())
 }
 
 /** Runs a query expected to yield a single scalar, e.g. a count. */
-export async function scalar(sql: string): Promise<string> {
-  return (await run(sql, 'TabSeparated', (rows) => rows.text())).trim()
+export async function scalar(sql: string, params: Record<string, unknown> = {}): Promise<string> {
+  return (await run(sql, params, 'TabSeparated', (rows) => rows.text())).trim()
 }
 
 interface Rows {
@@ -86,6 +109,7 @@ interface Rows {
  */
 async function run<R>(
   sql: string,
+  params: Record<string, unknown>,
   format: 'JSONEachRow' | 'TabSeparated',
   read: (rows: Rows) => Promise<R>,
 ): Promise<R> {
@@ -93,6 +117,7 @@ async function run<R>(
   try {
     const rows = await client.query({
       query: sql,
+      query_params: params,
       format,
       clickhouse_settings: QUERY_SETTINGS,
       abort_signal: signal,
@@ -105,13 +130,4 @@ async function run<R>(
     if (err instanceof OfficialError) throw new ClickHouseError(err.message.slice(0, 2000), sql)
     throw err
   }
-}
-
-/** Single-quoted SQL literal. ClickHouse escapes with backslashes. */
-export function lit(value: string | number): string {
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw new Error(`non-finite numeric literal: ${value}`)
-    return String(value)
-  }
-  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`
 }

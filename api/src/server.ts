@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { availableParallelism } from 'node:os'
 import { gzip } from 'node:zlib'
 import { promisify } from 'node:util'
-import { query, scalar, lit, ClickHouseError, requestSignal } from './ch'
+import { query, scalar, ClickHouseError, Params, requestSignal } from './ch'
 import { buildQuery, BadRequest, BadInput, TzRequired, UnknownOrderField } from './sql'
 import { endpoints, getEndpoints } from './registry'
 import { rawEndpoints, wrap, type RawEndpointDef } from './raw'
@@ -225,17 +225,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<unknow
 
     const listDef = byPath.get(url.pathname)
     if (listDef) {
-      const { sql, isCount } = buildQuery(listDef, url.searchParams)
-      if (isCount) return await send(200, await scalar(sql))
-      const rows = await query(`${sql} ${SETTINGS}`)
+      const { sql, isCount, params } = buildQuery(listDef, url.searchParams)
+      if (isCount) return await send(200, await scalar(sql, params))
+      const rows = await query(`${sql} ${SETTINGS}`, params)
       return await send(200, rows.map(normalize))
     }
 
     const rawDef = rawByPath.get(url.pathname)
     if (rawDef) {
-      const { sql, isCount } = wrap(rawDef, rawDef.build(url.searchParams, DB), url.searchParams)
-      if (isCount) return await send(200, await scalar(sql))
-      const rows = await query(`${sql} ${SETTINGS}`)
+      const bound = new Params()
+      const inner = rawDef.build(url.searchParams, DB, bound)
+      const { sql, isCount } = wrap(rawDef, inner, url.searchParams)
+      if (isCount) return await send(200, await scalar(sql, bound.values))
+      const rows = await query(`${sql} ${SETTINGS}`, bound.values)
       return await send(200, rows.map((r) => shapeRow(rawDef, normalize(r))))
     }
 
@@ -255,7 +257,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<unknow
         ...(getDef.joins ?? []),
       ].join(' ')
       const rows = await query(
-        `SELECT ${select} ${from} WHERE ${own}id = ${lit(Number(id))} LIMIT 1 ${SETTINGS}`,
+        `SELECT ${select} ${from} WHERE ${own}id = ${Number(id)} LIMIT 1 ${SETTINGS}`,
       )
       if (rows.length === 0) return await send(404, { detail: 'Not Found' })
       return await send(200, normalize(rows[0]))
