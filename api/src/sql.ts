@@ -31,6 +31,18 @@ export interface FilterDef {
   type: FilterType
   /** Quote values as strings rather than passing them through as numbers. */
   text?: boolean
+  /**
+   * The way in for a filter on a joined table: the base-table column it also
+   * restricts, through `table`, whose `key` holds the filter's values.
+   *
+   * Without it the base table is read whole, because ClickHouse does not carry
+   * a condition across a join, and on a table sorted by something else that is
+   * every row. With it the base table gets a condition of its own, which its
+   * sort key or a skip index can prune on. Declaring it is also a statement
+   * that the filter is a lookup callers are expected to make; a filter without
+   * one still works, at the cost of a full scan.
+   */
+  narrows?: { column: string; table: string; key: string }
 }
 
 /**
@@ -228,7 +240,12 @@ export function buildQuery(def: EndpointDef, params: URLSearchParams): BuildResu
     const raw = params.get(f.param)
     if (raw === null || raw === '') continue
     const clause = filterSql(f, raw, bound)
-    if (clause) where.push(clause)
+    if (!clause) continue
+    where.push(clause)
+    if (f.narrows) {
+      const { column, table, key } = f.narrows
+      where.push(`${column} IN (SELECT id FROM ${table} WHERE ${filterSql({ ...f, column: key }, raw, bound)})`)
+    }
   }
 
   // The alias is stripped because the substituted condition lands inside a
