@@ -42,3 +42,23 @@ describe.each(ordered.map((e) => [e.path, e] as const))('%s order_by', (_path, d
     expect(def.textOrder ?? []).toContain(field)
   })
 })
+
+/**
+ * siri_vehicle_location is sorted by time. A filter on a joined table leaves
+ * it unbounded, so it is read whole: 127 GiB, past CloudFront's 90 s.
+ */
+describe('a ride filter on /siri_vehicle_locations/list', () => {
+  const def = endpoints.find((e) => e.path === '/siri_vehicle_locations/list')!
+
+  it('also narrows the locations themselves, through their ride stops', () => {
+    const { sql } = buildQuery(def, new URLSearchParams({ siri_rides__ids: '153697999,153697748' }))
+    expect(sql).toContain(
+      'vl.siri_ride_stop_id IN (SELECT id FROM stride.siri_ride_stop WHERE siri_ride_id IN (153697999, 153697748))',
+    )
+  })
+
+  it('which the index on the locations can use', () => {
+    const sql = readFileSync(new URL('../../db/schema.sql', import.meta.url), 'utf8')
+    expect(sql).toMatch(/INDEX \w+ siri_ride_stop_id TYPE minmax/)
+  })
+})

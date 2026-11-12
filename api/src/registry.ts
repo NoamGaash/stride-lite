@@ -187,7 +187,12 @@ export const endpoints: EndpointDef[] = [
       { param: 'siri_routes__line_ref', column: 'rt.line_ref', type: 'equals' },
       { param: 'siri_ride__vehicle_ref', column: 'r.vehicle_ref', type: 'equals', text: true },
       { param: 'siri_routes__operator_ref', column: 'rt.operator_ref', type: 'equals' },
-      { param: 'siri_rides__ids', column: 'r.id', type: 'in' },
+      {
+        param: 'siri_rides__ids',
+        column: 'r.id',
+        type: 'in',
+        narrows: { column: 'vl.siri_ride_stop_id', table: `${DB}.siri_ride_stop`, key: 'siri_ride_id' },
+      },
       { param: 'siri_routes__ids', column: 'rt.id', type: 'in' },
       // Misspelled variants are still served; dropping them would break callers.
       {
