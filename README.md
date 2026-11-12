@@ -118,29 +118,22 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
 
 **Not done:**
 
-- **`gtfs_ride_stop` is loaded but not refreshed.** The daily GTFS loader replaces the other
-  GTFS tables; this one is a quarter of the database on its own and still dates from the dump.
+- **The GTFS hole from 2026-07-09 to 2026-11-07 is still filling.** `ingest/gtfs.sh` loads
+  every GTFS table daily, `gtfs_ride_stop` included, newest missing day first and at most 40
+  a night, so the days people look at arrive first and the rest arrive over a few nights.
 - **Throughput under catch-up is measured; a 24-hour steady state is not.** Ingest and
   enrichment together cost **14.7 s per hour of feed** — 9.8 s to pull the snapshots and 4.9 s
   to derive the typed rows — so a week of missed data takes about 41 minutes on six throttled
   cores. What is still unmeasured is RSS and CPU held over a full day of continuous running.
-- **Ride durations are computed for the days this build has walked, not yet for all of
-  them.** The pass is in place — `siri_ride_duration`, filled by a parameterised view that
-  the hourly chain and the backfill both call — and the dump's own 56,363,296 measurements are
-  seeded into the same table, so there is one place to read from. What is left is running it
-  over the history day by day, at roughly 7 s a day over a 36-hour window of locations.
-  Verified against 2024-09-10, the last period production measured: the duration matches on
-  108,230 of 108,237 rides. The two location ids do not and cannot — production picks among
-  readings sharing one `recorded_at_time` in scan order, and no tie-break reproduces its
-  choice better than a coin flip (48% and 51%). `updated_duration_minutes` and
-  `updated_first_last_vehicle_locations` stay NULL: they record when an Airflow task ran, and
-  there is no task.
-- **Siri rides are not matched to GTFS rides.** `enrich_ride` writes NULL into all four
-  `*_gtfs_ride_id` columns, so `/gtfs_rides_agg/group_by` returns `total_actual_rides = 0` for
-  every day this build ingested, where production now returns a number. It is one gate behind
-  ride durations — upstream's `siri/update_rides_gtfs.py` runs four `UPDATE`s, each gated on
-  `updated_duration_minutes is not null` — and that gate is now open. The
-  matching itself is three joins with a tolerance window, not a heuristic. See finding 13.
+- **The SIRI↔GTFS link and the missing durations are built, and not yet compared with
+  production ride by ride.** [`ingest/gtfs-link.sql`](ingest/gtfs-link.sql) ports upstream's
+  `siri/update_rides_gtfs.py`, and [`ingest/duration-history.sql`](ingest/duration-history.sql)
+  fills the durations production stopped measuring in November 2024
+  ([open-bus-stride-etl#22](https://github.com/hasadna/open-bus-stride-etl/issues/22)). Both
+  are refreshable views that walk back through history a day at a time on their own, newest
+  first. On the Pi Day fixture the durations recompute identically and the link rates match
+  production's on a recent day (71% by journey, 98.5% by route, against 73% and 98%), which
+  is agreement, not proof: the ride-by-ride comparison is still to do.
 - **The differential suite only compares a window that ended five months ago.** Every case
   sits inside 2025-01-01 to 2026-05-29, and neither bound is a choice about what to serve:
   the database holds every day from 2022-11-08, which is two years more than production,
@@ -159,8 +152,17 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
   route side rather than the stop side gives the same 6.19 s. It is also immune to
   parallelism — 6.19 s on one thread, 7.10 s on six — so no amount of hardware is the answer.
   `/rides_execution/list` is 3.96 s and probably the same cause.
-- **Nothing is deployed.** Priced at $2.72/day and `infra/` provisions a node that boots
-  itself, but nothing has been applied.
+- **The disk is 85% full: 55 of 369 GB free.** The plan is to shrink what is stored rather
+  than grow the volume. The candidates, largest first: `lat`/`lon` stored as
+  `Nullable(Float64)` (about 72 GB,
+  [#28](https://github.com/NoamGaash/stride-lite/issues/28)), projections that serve one
+  endpoint each ([#29](https://github.com/NoamGaash/stride-lite/issues/29)), and the landing
+  table `siri_vehicle_location_raw` (21 GiB), which nothing ever prunes after enrichment.
+- **Visitor queries share memory with ingest.** `users.xml` allows one query the whole node,
+  and once a visitor's queries left `enrich_route` without room. A per-query cap for the API
+  is proposed in [#40](https://github.com/NoamGaash/stride-lite/pull/40).
+- **Which requests are slow, and why, is not yet mapped**
+  ([#36](https://github.com/NoamGaash/stride-lite/issues/36)).
 
 ## Quickstart
 
