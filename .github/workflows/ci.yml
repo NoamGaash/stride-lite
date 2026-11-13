@@ -29,7 +29,7 @@ jobs:
           cache-dependency-path: api/package-lock.json
       - run: npm ci
       - run: npm run typecheck
-      - run: npx vitest run tests/sql.test.ts tests/registry.test.ts tests/status.test.ts tests/ops.test.ts
+      - run: npx vitest run tests/sql.test.ts tests/registry.test.ts tests/status.test.ts tests/ops.test.ts tests/ch.test.ts tests/openapi.test.ts tests/statsFile.test.ts tests/cache.test.ts
 
   api-e2e:
     # The API against a real database: tests/api/fixture.sh loads one hour of

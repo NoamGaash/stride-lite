@@ -9,6 +9,7 @@ import { rawEndpoints, wrap, type RawEndpointDef } from './raw'
 import { coverageSql, statusSql } from './status'
 import { DOCS_HTML, loadSpec } from './openapi'
 import { loadStats, saveStats } from './statsFile'
+import { cacheControl, listEnds, windowEnd } from './cache'
 import {
   memo,
   metricsSql,
@@ -234,9 +235,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<unknow
     const listDef = byPath.get(url.pathname)
     if (listDef) {
       const { sql, isCount, params } = buildQuery(listDef, url.searchParams)
-      if (isCount) return await send(200, await scalar(sql, params))
+      const cache = {
+        'Cache-Control': cacheControl(listDef, windowEnd(listEnds(listDef), url.searchParams)),
+      }
+      if (isCount) return await send(200, await scalar(sql, params), cache)
       const rows = await query(`${sql} ${SETTINGS}`, params)
-      return await send(200, rows.map(normalize))
+      return await send(200, rows.map(normalize), cache)
     }
 
     const rawDef = rawByPath.get(url.pathname)
@@ -244,9 +248,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<unknow
       const bound = new Params()
       const inner = rawDef.build(url.searchParams, DB, bound)
       const { sql, isCount } = wrap(rawDef, inner, url.searchParams)
-      if (isCount) return await send(200, await scalar(sql, bound.values))
+      const end = windowEnd(rawDef.windowEnd ?? [], url.searchParams, rawDef.windowEndDaysLater)
+      const cache = { 'Cache-Control': cacheControl(rawDef, end) }
+      if (isCount) return await send(200, await scalar(sql, bound.values), cache)
       const rows = await query(`${sql} ${SETTINGS}`, bound.values)
-      return await send(200, rows.map((r) => shapeRow(rawDef, normalize(r))))
+      return await send(200, rows.map((r) => shapeRow(rawDef, normalize(r))), cache)
     }
 
     const getDef = getByPath.get(url.pathname)
@@ -268,7 +274,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<unknow
         `SELECT ${select} ${from} WHERE ${own}id = ${Number(id)} LIMIT 1 ${SETTINGS}`,
       )
       if (rows.length === 0) return await send(404, { detail: 'Not Found' })
-      return await send(200, normalize(rows[0]))
+      return await send(200, normalize(rows[0]), { 'Cache-Control': cacheControl(getDef, undefined) })
     }
 
     return await send(404, { detail: 'Not Found' })

@@ -1,3 +1,4 @@
+import type { CacheMark } from './cache'
 import { Params } from './ch'
 import { BadInput, BadRequest, DEFAULT_LIMIT, MAX_LIMIT } from './sql'
 
@@ -34,6 +35,11 @@ export interface RawEndpointDef {
   coerce?: Record<string, 'date' | 'string'>
   /** Keys the response model declares, in declaration order. Absent ones are null. */
   shape?: string[]
+  /** The parameters whose days end the window a response covers; see `windowEnd`. */
+  windowEnd?: string[]
+  /** For a window that runs on past the day its parameter names. */
+  windowEndDaysLater?: number
+  cache?: CacheMark['cache']
 }
 
 function requireParam(p: URLSearchParams, name: string): string {
@@ -123,6 +129,7 @@ export const rawEndpoints: RawEndpointDef[] = [
     // `order by date, agency_name` upstream, which is PostgreSQL's glibc
     // collation; see `collate` in sql.ts for why that is two expressions here.
     path: '/gtfs_agencies/list',
+    windowEnd: ['date_to'],
     allowNoLimit: true,
     noGetCount: true,
     shape: ['date', 'operator_ref', 'agency_name'],
@@ -147,6 +154,7 @@ export const rawEndpoints: RawEndpointDef[] = [
   },
   {
     path: '/gtfs_rides_agg/list',
+    windowEnd: ['date_to'],
     defaultLimit: 1000,
     orderBy: 'gtfs_route_hour asc, gtfs_route_id asc',
     coerce: { gtfs_route_hour: 'date' },
@@ -163,6 +171,7 @@ export const rawEndpoints: RawEndpointDef[] = [
   },
   {
     path: '/gtfs_rides_agg/group_by',
+    windowEnd: ['date_to'],
     allowNoLimit: true,
     coerce: { gtfs_route_date: 'date', gtfs_route_hour: 'date' },
     shape: [
@@ -222,6 +231,7 @@ export const rawEndpoints: RawEndpointDef[] = [
   },
   {
     path: '/rides_execution/list',
+    windowEnd: ['date_to'],
     defaultLimit: 100,
     orderBy: 'planned_start_time asc, actual_start_time asc',
     shape: ['planned_start_time', 'actual_start_time', 'gtfs_ride_id'],
@@ -261,6 +271,7 @@ export const rawEndpoints: RawEndpointDef[] = [
   },
   {
     path: '/route_timetable/list',
+    windowEnd: ['planned_start_time_date_to'],
     // `gtfs_line_ref` and `gtfs_ride_id` are declared `str` on the response
     // model although both columns are integers, so pydantic renders them quoted.
     coerce: { gtfs_line_ref: 'string', gtfs_ride_id: 'string' },
@@ -348,6 +359,8 @@ export const rawEndpoints: RawEndpointDef[] = [
   },
   {
     path: '/siri_velocity_aggregation/siri_velocity_aggregation',
+    windowEnd: ['recorded_from'],
+    windowEndDaysLater: 1,
     allowNoLimit: true,
     shape: ['rounded_lon', 'rounded_lat', 'total_sample_count', 'average_rolling_avg', 'stddev_rolling_avg'],
     build: (p, db, bound) => {

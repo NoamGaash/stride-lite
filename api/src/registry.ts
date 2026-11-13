@@ -1,5 +1,6 @@
 import { requireBoundedArrivalWindow } from './sql'
 import type { EndpointDef } from './sql'
+import type { CacheMark } from './cache'
 
 const DB = process.env.CH_DB ?? 'stride'
 
@@ -707,7 +708,7 @@ export const endpoints: EndpointDef[] = [
 ]
 
 /** `/<name>/get` endpoints: single row by id, same field list as the plain list. */
-export const getEndpoints: {
+export const getEndpoints: (CacheMark & {
   path: string
   table: string
   fields: string[]
@@ -719,7 +720,7 @@ export const getEndpoints: {
   alias?: string
   joins?: string[]
   related?: { alias: string; fields: string[] }[]
-}[] = [
+})[] = [
   { path: '/siri_routes/get', table: `${DB}.siri_route`, fields: ['id', 'line_ref', 'operator_ref'] },
   { path: '/siri_stops/get', table: `${DB}.siri_stop`, fields: ['id', 'code'] },
   {

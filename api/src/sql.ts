@@ -1,3 +1,4 @@
+import type { CacheMark } from './cache'
 import { Params } from './ch'
 
 /**
@@ -58,6 +59,7 @@ export interface Related {
 
 export interface EndpointDef {
   path: string
+  cache?: CacheMark['cache']
   table: string
   alias: string
   /** The SQLAlchemy model's class name, which appears in upstream error text. */

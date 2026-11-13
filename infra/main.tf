@@ -537,7 +537,7 @@ resource "aws_cloudfront_distribution" "api" {
 
     min_ttl     = 0
     default_ttl = 300
-    max_ttl     = 3600
+    max_ttl     = 172800
     compress    = true
   }
 
