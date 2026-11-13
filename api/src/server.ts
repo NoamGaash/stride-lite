@@ -8,6 +8,7 @@ import { endpoints, getEndpoints } from './registry'
 import { rawEndpoints, wrap, type RawEndpointDef } from './raw'
 import { coverageSql, statusSql } from './status'
 import { DOCS_HTML, loadSpec } from './openapi'
+import { loadStats, saveStats } from './statsFile'
 import {
   memo,
   metricsSql,
@@ -294,6 +295,17 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<unknow
  * dev container is reached through forwarding. A loopback bind refuses both. The
  * boundary is the security group, which opens port 80 and nothing else.
  */
+const STATS_FILE = process.env.STATS_FILE
+const STATS_SAVE_MS = 5 * 60_000
+if (STATS_FILE) {
+  const save = () =>
+    saveStats(requests, STATS_FILE).catch((err) => console.error('saving request stats:', err))
+  void loadStats(requests, STATS_FILE)
+  setInterval(save, STATS_SAVE_MS).unref()
+  for (const signal of ['SIGTERM', 'SIGINT'] as const)
+    process.once(signal, () => void save().finally(() => process.exit(0)))
+}
+
 server.listen(PORT, HOST, () => {
   const paths = endpoints.length + getEndpoints.length + rawEndpoints.length
   console.log(`stride-lite listening on http://${HOST}:${PORT} (${paths} endpoints)`)

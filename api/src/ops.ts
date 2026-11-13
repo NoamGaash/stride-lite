@@ -301,7 +301,7 @@ type Summary = { window: Window; from: string; to: string; buckets: Bucket[]; ro
  */
 export class RequestStats {
   private samples: Sample[] = []
-  private readonly startedAt: number
+  private startedAt: number
   /** Past MAX_SAMPLES the oldest are dropped, and the summary must not claim them. */
   private forgotBefore = 0
 
@@ -349,7 +349,21 @@ export class RequestStats {
   lastHour(): Row[] {
     return this.summary('hour').rows
   }
+
+  snapshot(): SavedStats {
+    return { startedAt: this.startedAt, forgotBefore: this.forgotBefore, samples: this.samples }
+  }
+
+  /** Takes over a previous process's memory, so a restart does not read as a quiet week. */
+  restore(saved: SavedStats): void {
+    const weekAgo = this.now() - WINDOWS.week.ms
+    this.samples = [...saved.samples.filter((s) => s.at > weekAgo), ...this.samples].slice(-MAX_SAMPLES)
+    this.startedAt = Math.min(this.startedAt, saved.startedAt)
+    this.forgotBefore = Math.max(this.forgotBefore, saved.forgotBefore)
+  }
 }
+
+export type SavedStats = { startedAt: number; forgotBefore: number; samples: Sample[] }
 
 function byPathRows(samples: Sample[]): Row[] {
   const byPath = new Map<string, Sample[]>()
