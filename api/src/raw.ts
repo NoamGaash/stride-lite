@@ -1,4 +1,4 @@
-import { lit } from './ch'
+import { Params } from './ch'
 import { BadInput, BadRequest, DEFAULT_LIMIT, MAX_LIMIT } from './sql'
 
 /**
@@ -17,7 +17,7 @@ import { BadInput, BadRequest, DEFAULT_LIMIT, MAX_LIMIT } from './sql'
 export interface RawEndpointDef {
   path: string
   /** The inner query, before limit/offset/order are wrapped around it. */
-  build: (p: URLSearchParams, db: string) => string
+  build: (p: URLSearchParams, db: string, bound: Params) => string
   /** Upstream's hardcoded `order_by` argument to `sql_route.list_`. */
   orderBy?: string
   defaultLimit?: number
@@ -94,15 +94,15 @@ export function wrap(def: RawEndpointDef, inner: string, p: URLSearchParams): { 
 }
 
 /** `and agg.gtfs_route_date >= … and rt.date between date_from ± 30 days`, shared by both gtfs_rides_agg endpoints. */
-function aggWhere(p: URLSearchParams): string {
+function aggWhere(p: URLSearchParams, bound: Params): string {
   const dateFrom = civilDate(requireParam(p, 'date_from'), 'date_from')
   const dateTo = civilDate(requireParam(p, 'date_to'), 'date_to')
   const wheres = [
     'agg.gtfs_route_id = rt.id',
-    `agg.gtfs_route_date >= ${lit(dateFrom)}`,
-    `agg.gtfs_route_date <= ${lit(dateTo)}`,
-    `rt.date >= ${lit(shiftDays(dateFrom, -30))}`,
-    `rt.date <= ${lit(shiftDays(dateFrom, 30))}`,
+    `agg.gtfs_route_date >= ${bound.bind(dateFrom, 'Date')}`,
+    `agg.gtfs_route_date <= ${bound.bind(dateTo, 'Date')}`,
+    `rt.date >= ${bound.bind(shiftDays(dateFrom, -30), 'Date')}`,
+    `rt.date <= ${bound.bind(shiftDays(dateFrom, 30), 'Date')}`,
   ]
   const exFrom = p.get('exclude_hours_from')
   const exTo = p.get('exclude_hours_to')
@@ -126,12 +126,12 @@ export const rawEndpoints: RawEndpointDef[] = [
     allowNoLimit: true,
     noGetCount: true,
     shape: ['date', 'operator_ref', 'agency_name'],
-    build: (p, db) => {
+    build: (p, db, bound) => {
       const wheres: string[] = []
       const from = p.get('date_from')
       const to = p.get('date_to')
-      if (from) wheres.push(`date >= ${lit(civilDate(from, 'date_from'))}`)
-      if (to) wheres.push(`date <= ${lit(civilDate(to, 'date_to'))}`)
+      if (from) wheres.push(`date >= ${bound.bind(civilDate(from, 'date_from'), 'Date')}`)
+      if (to) wheres.push(`date <= ${bound.bind(civilDate(to, 'date_to'), 'Date')}`)
       const limit = p.get('limit') ? int(p.get('limit')!, 'limit') : DEFAULT_LIMIT
       const offset = Number(p.get('offset') ?? 0)
       return `
@@ -151,7 +151,7 @@ export const rawEndpoints: RawEndpointDef[] = [
     orderBy: 'gtfs_route_hour asc, gtfs_route_id asc',
     coerce: { gtfs_route_hour: 'date' },
     shape: ['gtfs_route_id', 'gtfs_route_hour', 'num_planned_rides', 'num_actual_rides', 'operator_ref'],
-    build: (p, db) => `
+    build: (p, db, bound) => `
       SELECT
           agg.gtfs_route_id AS gtfs_route_id,
           agg.gtfs_route_hour AS gtfs_route_hour,
@@ -159,7 +159,7 @@ export const rawEndpoints: RawEndpointDef[] = [
           agg.num_actual_rides AS num_actual_rides,
           rt.operator_ref AS operator_ref
       FROM ${db}.gtfs_rides_agg_by_hour AS agg, ${db}.gtfs_route AS rt
-      WHERE ${aggWhere(p)}`,
+      WHERE ${aggWhere(p, bound)}`,
   },
   {
     path: '/gtfs_rides_agg/group_by',
@@ -169,7 +169,7 @@ export const rawEndpoints: RawEndpointDef[] = [
       'gtfs_route_date', 'gtfs_route_hour', 'operator_ref', 'day_of_week', 'line_ref',
       'route_short_name', 'route_long_name', 'total_routes', 'total_planned_rides', 'total_actual_rides',
     ],
-    build: (p, db) => {
+    build: (p, db, bound) => {
       const fields = requireParam(p, 'group_by')
         .split(',')
         .map((f) => f.trim())
@@ -215,7 +215,7 @@ export const rawEndpoints: RawEndpointDef[] = [
             sum(agg.num_planned_rides) AS total_planned_rides,
             sum(agg.num_actual_rides) AS total_actual_rides
         FROM ${db}.gtfs_rides_agg_by_hour AS agg, ${db}.gtfs_route AS rt
-        WHERE ${aggWhere(p)}
+        WHERE ${aggWhere(p, bound)}
         GROUP BY ${groupBy.join(', ')})
         ORDER BY ${fields.join(', ')}`
     },
@@ -225,7 +225,7 @@ export const rawEndpoints: RawEndpointDef[] = [
     defaultLimit: 100,
     orderBy: 'planned_start_time asc, actual_start_time asc',
     shape: ['planned_start_time', 'actual_start_time', 'gtfs_ride_id'],
-    build: (p, db) => {
+    build: (p, db, bound) => {
       const dateFrom = civilDate(requireParam(p, 'date_from'), 'date_from')
       const dateTo = civilDate(requireParam(p, 'date_to'), 'date_to')
       const operatorRef = int(requireParam(p, 'operator_ref'), 'operator_ref')
@@ -233,6 +233,8 @@ export const rawEndpoints: RawEndpointDef[] = [
       // `date_trunc('day', t AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Jerusalem')`
       // is the calendar day in Israel, which is 23 or 25 hours long twice a year.
       const day = (col: string) => `toDate(toTimeZone(${col}, 'Asia/Jerusalem'))`
+      const from = bound.bind(dateFrom, 'Date')
+      const to = bound.bind(dateTo, 'Date')
       return `
         SELECT
             actual_rides.start_time AS actual_start_time,
@@ -244,7 +246,7 @@ export const rawEndpoints: RawEndpointDef[] = [
             INNER JOIN ${db}.siri_route AS sr ON siri_ride.siri_route_id = sr.id
             WHERE sr.operator_ref = ${operatorRef}
               AND sr.line_ref = ${lineRef}
-              AND ${day('siri_ride.scheduled_start_time')} BETWEEN ${lit(dateFrom)} AND ${lit(dateTo)}
+              AND ${day('siri_ride.scheduled_start_time')} BETWEEN ${from} AND ${to}
         ) AS actual_rides
         FULL OUTER JOIN (
             SELECT gtfs_ride.start_time AS start_time, gtfs_ride.id AS gtfs_ride_id
@@ -252,7 +254,7 @@ export const rawEndpoints: RawEndpointDef[] = [
             INNER JOIN ${db}.gtfs_route AS gr ON gtfs_ride.gtfs_route_id = gr.id
             WHERE gr.operator_ref = ${operatorRef}
               AND gr.line_ref = ${lineRef}
-              AND ${day('gtfs_ride.start_time')} BETWEEN ${lit(dateFrom)} AND ${lit(dateTo)}
+              AND ${day('gtfs_ride.start_time')} BETWEEN ${from} AND ${to}
         ) AS planned_rides
         ON actual_rides.start_time = planned_rides.start_time`
     },
@@ -266,7 +268,7 @@ export const rawEndpoints: RawEndpointDef[] = [
       'id', 'name', 'city', 'lon', 'lat',
       'planned_arrival_time', 'gtfs_line_ref', 'gtfs_line_start_time', 'gtfs_ride_id',
     ],
-    build: (p, db) => {
+    build: (p, db, bound) => {
       const from = p.get('planned_start_time_date_from')
       const to = p.get('planned_start_time_date_to')
       const lineRefs = p.get('line_refs')
@@ -280,8 +282,8 @@ export const rawEndpoints: RawEndpointDef[] = [
         if (Math.abs(span) > 86_400_000)
           throw new BadInput('planned_start_time_date_from/to interval must be lower than 1 day')
       }
-      if (from) wheres.push(`gr.start_time >= ${lit(instant(from))}`)
-      if (to) wheres.push(`gr.start_time <= ${lit(instant(to))}`)
+      if (from) wheres.push(`gr.start_time >= ${bound.bind(instant(from), 'DateTime')}`)
+      if (to) wheres.push(`gr.start_time <= ${bound.bind(instant(to), 'DateTime')}`)
       if (lineRefs) {
         const list = lineRefs.split(',').map((v) => v.trim()).filter(Boolean)
         if (list.length > 1000)
@@ -310,7 +312,7 @@ export const rawEndpoints: RawEndpointDef[] = [
   {
     path: '/stop_arrivals/list',
     shape: ['actual_arrival_time'],
-    build: (p, db) => {
+    build: (p, db, bound) => {
       const wheres: string[] = []
       const stopId = p.get('gtfs_stop_id')
       const rideIds = p.get('gtfs_ride_ids')
@@ -348,8 +350,8 @@ export const rawEndpoints: RawEndpointDef[] = [
     path: '/siri_velocity_aggregation/siri_velocity_aggregation',
     allowNoLimit: true,
     shape: ['rounded_lon', 'rounded_lat', 'total_sample_count', 'average_rolling_avg', 'stddev_rolling_avg'],
-    build: (p, db) => {
-      const recordedFrom = instant(requireParam(p, 'recorded_from'))
+    build: (p, db, bound) => {
+      const from = bound.bind(instant(requireParam(p, 'recorded_from')), 'DateTime')
       const precision = p.get('rounding_precision') ? int(p.get('rounding_precision')!, 'rounding_precision') : 2
       if (precision < 0 || precision > 10)
         throw new BadRequest('rounding_precision: must be between 0 and 10')
@@ -388,7 +390,7 @@ export const rawEndpoints: RawEndpointDef[] = [
                   AND velocity < 200
                   AND lon BETWEEN ${lonMin} AND ${lonMax}
                   AND lat BETWEEN ${latMin} AND ${latMax}
-                  AND recorded_at_time BETWEEN ${lit(recordedFrom)} AND ${lit(recordedFrom)} + INTERVAL 1 DAY
+                  AND recorded_at_time BETWEEN ${from} AND ${from} + INTERVAL 1 DAY
             )
         )
         GROUP BY rounded_lon, rounded_lat

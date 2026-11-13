@@ -1,4 +1,4 @@
-import { lit } from './ch'
+import { Params } from './ch'
 
 /**
  * Mirrors the filter vocabulary of open_bus_stride_api/routers/common.py.
@@ -139,7 +139,7 @@ export class TzRequired extends Error {
   }
 }
 
-function filterSql(f: FilterDef, raw: string): string | null {
+function filterSql(f: FilterDef, raw: string, params: Params): string | null {
   const num = (v: string) => {
     const n = Number(v)
     if (!Number.isFinite(n)) throw new BadRequest(`${f.param}: not a number`)
@@ -154,27 +154,27 @@ function filterSql(f: FilterDef, raw: string): string | null {
       if (values.length === 0) return null
       if (values.length > 1000)
         throw new BadRequest('too many items in list, maximum allowed is 1000 items')
-      const list = values.map((v) => (f.text ? lit(v) : num(v))).join(', ')
-      return `${f.column} IN (${list})`
+      if (f.text) return `${f.column} IN ${params.bind(values, 'Array(String)')}`
+      return `${f.column} IN (${values.map(num).join(', ')})`
     }
     case 'equals':
-      return `${f.column} = ${f.text ? lit(raw) : num(raw)}`
+      return `${f.column} = ${f.text ? params.bind(raw, 'String') : num(raw)}`
     case 'datetime_from':
-      return `${f.column} >= ${lit(parseInstant(raw, 'up'))}`
+      return `${f.column} >= ${params.bind(parseInstant(raw, 'up'), 'DateTime')}`
     case 'datetime_to':
-      return `${f.column} <= ${lit(parseInstant(raw, 'down'))}`
+      return `${f.column} <= ${params.bind(parseInstant(raw, 'down'), 'DateTime')}`
     case 'date_from':
-      return `${f.column} >= ${lit(parseCivilDate(raw))}`
+      return `${f.column} >= ${params.bind(parseCivilDate(raw), 'Date')}`
     case 'date_to':
-      return `${f.column} <= ${lit(parseCivilDate(raw))}`
+      return `${f.column} <= ${params.bind(parseCivilDate(raw), 'Date')}`
     case 'greater_or_equal':
-      return `${f.column} >= ${f.text ? lit(raw) : num(raw)}`
+      return `${f.column} >= ${f.text ? params.bind(raw, 'String') : num(raw)}`
     case 'lower_or_equal':
-      return `${f.column} <= ${f.text ? lit(raw) : num(raw)}`
+      return `${f.column} <= ${f.text ? params.bind(raw, 'String') : num(raw)}`
     case 'prefix':
-      return `${f.column} LIKE ${lit(`${raw}%`)}`
+      return `${f.column} LIKE ${params.bind(`${raw}%`, 'String')}`
     case 'contains':
-      return `${f.column} LIKE ${lit(`%${raw}%`)}`
+      return `${f.column} LIKE ${params.bind(`%${raw}%`, 'String')}`
   }
 }
 
@@ -227,22 +227,24 @@ function parseInstant(raw: string, round: 'up' | 'down'): string {
 export interface BuildResult {
   sql: string
   isCount: boolean
+  params: Record<string, unknown>
 }
 
 export function buildQuery(def: EndpointDef, params: URLSearchParams): BuildResult {
   def.validate?.(params)
   const getCount = ['true', '1'].includes((params.get('get_count') ?? '').toLowerCase())
 
+  const bound = new Params()
   const where: string[] = []
   for (const f of def.filters) {
     const raw = params.get(f.param)
     if (raw === null || raw === '') continue
-    const clause = filterSql(f, raw)
+    const clause = filterSql(f, raw, bound)
     if (!clause) continue
     where.push(clause)
     if (f.narrows) {
       const { column, table, key } = f.narrows
-      where.push(`${column} IN (SELECT id FROM ${table} WHERE ${filterSql({ ...f, column: key }, raw)})`)
+      where.push(`${column} IN (SELECT id FROM ${table} WHERE ${filterSql({ ...f, column: key }, raw, bound)})`)
     }
   }
 
@@ -259,7 +261,7 @@ export function buildQuery(def: EndpointDef, params: URLSearchParams): BuildResu
   const whereSql = where.length ? `\nWHERE ${where.join('\n  AND ')}` : ''
 
   if (getCount) {
-    return { sql: `SELECT count() ${from.join('\n')}${whereSql}`, isCount: true }
+    return { sql: `SELECT count() ${from.join('\n')}${whereSql}`, isCount: true, params: bound.values }
   }
 
   // Field names are quoted because `siri_ride_stop.order` is a reserved word.
@@ -278,6 +280,7 @@ export function buildQuery(def: EndpointDef, params: URLSearchParams): BuildResu
   return {
     sql: `SELECT ${select.join(',\n       ')}\n${from.join('\n')}${whereSql}${order}\nLIMIT ${limit}${offsetSql}`,
     isCount: false,
+    params: bound.values,
   }
 }
 

@@ -34,8 +34,11 @@ const unordered: EndpointDef = { ...routes, orderByDefault: undefined }
 /** Upstream `skip_order_by` — like /route_timetable/list. */
 const unsorted: EndpointDef = { ...routes, skipOrderBy: true }
 
-const q = (params: Record<string, string>) =>
-  buildQuery(routes, new URLSearchParams(params)).sql
+/** The SQL with each bound value written back where it is bound, to read the way ClickHouse binds it. */
+const q = (params: Record<string, string>) => {
+  const { sql, params: bound } = buildQuery(routes, new URLSearchParams(params))
+  return sql.replace(/\{(p\d+):[^}]+\}/g, (_, name: string) => `'${String(bound[name])}'`)
+}
 
 describe('limits', () => {
   it('defaults to the upstream default limit', () => {
@@ -136,8 +139,11 @@ describe('filters', () => {
     expect(() => q({ line_refs: many })).toThrow(BadRequest)
   })
 
-  it('escapes quotes in text values', () => {
-    expect(q({ name: "O'Brien" })).toContain("r.name = 'O\\'Brien'")
+  it('binds a text value rather than writing it into the SQL', () => {
+    const { sql, params } = buildQuery(routes, new URLSearchParams({ name: "O'Brien" }))
+    expect(sql).toContain('r.name = {p0:String}')
+    expect(sql).not.toContain('Brien')
+    expect(params).toEqual({ p0: "O'Brien" })
   })
 
   it('rejects a non-numeric value for a numeric filter', () => {

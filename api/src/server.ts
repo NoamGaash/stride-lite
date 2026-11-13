@@ -2,11 +2,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { availableParallelism } from 'node:os'
 import { gzip } from 'node:zlib'
 import { promisify } from 'node:util'
-import { query, scalar, lit, ClickHouseError, requestSignal } from './ch'
+import { query, scalar, ClickHouseError, Params, requestSignal } from './ch'
 import { buildQuery, BadRequest, BadInput, TzRequired, UnknownOrderField } from './sql'
 import { endpoints, getEndpoints } from './registry'
 import { rawEndpoints, wrap, type RawEndpointDef } from './raw'
 import { coverageSql, statusSql } from './status'
+import { DOCS_HTML, loadSpec } from './openapi'
+import { loadStats, saveStats } from './statsFile'
 import {
   memo,
   metricsSql,
@@ -18,6 +20,7 @@ import {
   UnknownSource,
 } from './ops'
 
+const SPEC = loadSpec(endpoints)
 const PORT = Number(process.env.PORT ?? 8080)
 const HOST = process.env.HOST ?? '0.0.0.0'
 
@@ -173,6 +176,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<unknow
   try {
     if (url.pathname === '/healthz') return await send(200, { ok: true })
 
+    if (url.pathname === '/openapi.json') return await send(200, SPEC)
+    if (url.pathname === '/docs') {
+      return await send(200, DOCS_HTML, { 'Content-Type': 'text/html; charset=utf-8' })
+    }
+
     // Public on purpose; see src/status.ts. Measured at 78 ms, and the CDN in
     // front caches it, so it is not a way to make the database work.
     if (url.pathname === '/status') {
@@ -225,17 +233,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<unknow
 
     const listDef = byPath.get(url.pathname)
     if (listDef) {
-      const { sql, isCount } = buildQuery(listDef, url.searchParams)
-      if (isCount) return await send(200, await scalar(sql))
-      const rows = await query(`${sql} ${SETTINGS}`)
+      const { sql, isCount, params } = buildQuery(listDef, url.searchParams)
+      if (isCount) return await send(200, await scalar(sql, params))
+      const rows = await query(`${sql} ${SETTINGS}`, params)
       return await send(200, rows.map(normalize))
     }
 
     const rawDef = rawByPath.get(url.pathname)
     if (rawDef) {
-      const { sql, isCount } = wrap(rawDef, rawDef.build(url.searchParams, DB), url.searchParams)
-      if (isCount) return await send(200, await scalar(sql))
-      const rows = await query(`${sql} ${SETTINGS}`)
+      const bound = new Params()
+      const inner = rawDef.build(url.searchParams, DB, bound)
+      const { sql, isCount } = wrap(rawDef, inner, url.searchParams)
+      if (isCount) return await send(200, await scalar(sql, bound.values))
+      const rows = await query(`${sql} ${SETTINGS}`, bound.values)
       return await send(200, rows.map((r) => shapeRow(rawDef, normalize(r))))
     }
 
@@ -255,7 +265,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<unknow
         ...(getDef.joins ?? []),
       ].join(' ')
       const rows = await query(
-        `SELECT ${select} ${from} WHERE ${own}id = ${lit(Number(id))} LIMIT 1 ${SETTINGS}`,
+        `SELECT ${select} ${from} WHERE ${own}id = ${Number(id)} LIMIT 1 ${SETTINGS}`,
       )
       if (rows.length === 0) return await send(404, { detail: 'Not Found' })
       return await send(200, normalize(rows[0]))
@@ -285,6 +295,17 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<unknow
  * dev container is reached through forwarding. A loopback bind refuses both. The
  * boundary is the security group, which opens port 80 and nothing else.
  */
+const STATS_FILE = process.env.STATS_FILE
+const STATS_SAVE_MS = 5 * 60_000
+if (STATS_FILE) {
+  const save = () =>
+    saveStats(requests, STATS_FILE).catch((err) => console.error('saving request stats:', err))
+  void loadStats(requests, STATS_FILE)
+  setInterval(save, STATS_SAVE_MS).unref()
+  for (const signal of ['SIGTERM', 'SIGINT'] as const)
+    process.once(signal, () => void save().finally(() => process.exit(0)))
+}
+
 server.listen(PORT, HOST, () => {
   const paths = endpoints.length + getEndpoints.length + rawEndpoints.length
   console.log(`stride-lite listening on http://${HOST}:${PORT} (${paths} endpoints)`)

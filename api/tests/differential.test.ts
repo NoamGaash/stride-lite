@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import spec from './openapi.json' with { type: 'json' }
+import spec from '../openapi.json' with { type: 'json' }
 
 const PROD = process.env.PROD_API ?? 'https://open-bus-stride-api.hasadna.org.il'
 const LOCAL = process.env.LOCAL_API ?? 'http://127.0.0.1:8080'

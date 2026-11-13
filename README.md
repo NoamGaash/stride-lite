@@ -176,6 +176,10 @@ backfills two hours of live SIRI from S3, and starts the API on :8080. From that
 database keeps itself current with no scheduler and no worker. `./up.sh 6` backfills six
 hours instead; `./up.sh 0` backfills nothing and only moves forward.
 
+`/docs` is the API's Swagger UI, and `/openapi.json` its spec: production's own, with each
+filter marked `x-lookup: indexed` or `scan`. The mark is read from `db/schema.sql` and
+`db/projections.sql`, so it says what the database can actually find without a full read.
+
 No Docker, no root, no credentials — the data is public. The resource ceilings are in
 [`ingest/local.xml`](ingest/local.xml) and exist because the reference machine for this
 project is somebody's workstation; on a dedicated host, raise them. The full reproduction, including the
