@@ -84,8 +84,11 @@ load() {
   rm -rf "$tmp"
   # Derived, so computed here rather than shipped: computed before the cut,
   # each would describe the whole day and not the rows the fixture holds.
-  ch --param_day="$DAY" --query "INSERT INTO siri_ride_gtfs SELECT * FROM enrich_gtfs_link_src(from = {day:Date}, to = {day:Date})"
+  # In the order ingest runs them: the day is measured before its rides are
+  # linked, and measured again once they are.
   ch --param_day="$DAY" --query "INSERT INTO ingest_day_health SELECT * FROM ingest_day_health_src(day = {day:Date})"
+  ch --param_day="$DAY" --query "INSERT INTO siri_ride_gtfs SELECT * FROM enrich_gtfs_link_src(from = {day:Date}, to = {day:Date})"
+  ch --query "INSERT INTO ingest_day_health SELECT * FROM ingest_day_health_resettle"
   # gtfs_rides_agg_by_hour is derived and not shipped: refreshing it here is
   # what ingest would do, and it then holds exactly the fixture's operators.
   ch --query "SYSTEM REFRESH VIEW gtfs_rides_agg_by_hour_refresh"

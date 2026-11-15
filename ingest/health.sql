@@ -47,7 +47,7 @@ FROM
     SELECT count() AS n,
            countIf(id IN (SELECT siri_ride_id FROM siri_ride_duration)) AS measured,
            countIf(id IN (SELECT siri_ride_id FROM siri_ride_gtfs
-                          WHERE scheduled_time_gtfs_ride_id IS NOT NULL)) AS linked
+                          WHERE gtfs_ride_id IS NOT NULL)) AS linked
     FROM siri_ride
     WHERE scheduled_start_time >= toDateTime({day:Date})
       AND scheduled_start_time < toDateTime({day:Date}) + INTERVAL 1 DAY
@@ -62,3 +62,21 @@ CREATE OR REPLACE MATERIALIZED VIEW ingest_day_health_daily
 REFRESH EVERY 6 HOUR DEPENDS ON enrich_duration
 APPEND TO ingest_day_health AS
 SELECT * FROM ingest_day_health_src(day = today() - 1);
+
+-- The day above is measured before its rides are linked: ingest/gtfs-link.sql
+-- waits until two days later, so that first verdict counts no links. This is
+-- the day to measure again: the newest one whose verdict still says no ride was
+-- linked although siri_ride_gtfs now links some. It also walks back through
+-- days measured during a backfill, one per run.
+CREATE OR REPLACE VIEW ingest_day_health_resettle AS
+WITH (SELECT maxOrNull(day) FROM ingest_day_health FINAL
+      WHERE rides_linked_to_gtfs = 0
+        AND day IN (SELECT DISTINCT journey_date FROM siri_ride_gtfs
+                    WHERE gtfs_ride_id IS NOT NULL)) AS unsettled
+SELECT * FROM ingest_day_health_src(day = ifNull(unsettled, toDate(0)))
+WHERE unsettled IS NOT NULL;
+
+CREATE OR REPLACE MATERIALIZED VIEW ingest_day_health_resettle_run
+REFRESH EVERY 10 MINUTE
+APPEND TO ingest_day_health AS
+SELECT * FROM ingest_day_health_resettle;
