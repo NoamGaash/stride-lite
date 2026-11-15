@@ -35,7 +35,8 @@ jobs:
     # The API against a real database: tests/api/fixture.sh loads one hour of
     # Pi Day 2025 from files in the repository, and every tests/api/*.hurl runs
     # against it. Nothing here reaches Hasadna's bucket or production.
-    runs-on: ubuntu-latest
+    # Hurl's Linux build links libxml2.so.2, which Ubuntu 26.04 no longer ships.
+    runs-on: ubuntu-24.04
     env:
       HURL_VERSION: 8.1.0
       HURL_SHA256: b497e7ab328100c507f1f3323ebe7cc5990d831ae4f9473b74d40b02971da4ca
