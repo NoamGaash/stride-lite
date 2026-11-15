@@ -1,0 +1,27 @@
+{
+  "name": "stride-lite",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:4-22-trixie",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/aws-cli:1": {},
+    "ghcr.io/devcontainers/features/terraform:1": { "version": "1.14.4" },
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
+  },
+  "mounts": ["source=claude-code-config-${devcontainerId},target=/home/node/.claude,type=volume"],
+  "forwardPorts": [8080, 8123],
+  "portsAttributes": {
+    "8080": { "label": "API" },
+    "8123": { "label": "ClickHouse HTTP" }
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "GitHub.vscode-github-actions",
+        "hashicorp.terraform",
+        "timonwong.shellcheck",
+        "vitest.explorer"
+      ]
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh"
+}
