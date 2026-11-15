@@ -108,7 +108,7 @@ function aggWhere(p: URLSearchParams, bound: Params): string {
     `agg.gtfs_route_date >= ${bound.bind(dateFrom, 'Date')}`,
     `agg.gtfs_route_date <= ${bound.bind(dateTo, 'Date')}`,
     `rt.date >= ${bound.bind(shiftDays(dateFrom, -30), 'Date')}`,
-    `rt.date <= ${bound.bind(shiftDays(dateFrom, 30), 'Date')}`,
+    `rt.date <= ${bound.bind(shiftDays(dateTo, 30), 'Date')}`,
   ]
   const exFrom = p.get('exclude_hours_from')
   const exTo = p.get('exclude_hours_to')
