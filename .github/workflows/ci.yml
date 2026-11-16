@@ -80,11 +80,13 @@ jobs:
       - uses: actions/checkout@v4
       - name: Start ClickHouse
         # query_log is off in the built-in config, and tests/backup.sh reads it.
+        # Not --daemon: a daemon leaves the working directory and so never sees
+        # config.d.
         run: |
           curl -s https://clickhouse.com/ | sh
           mkdir -p config.d
           echo '<clickhouse><query_log><database>system</database><table>query_log</table></query_log></clickhouse>' > config.d/query_log.xml
-          ./clickhouse server --daemon
+          ./clickhouse server > clickhouse-server.log 2>&1 &
           for _ in $(seq 30); do ./clickhouse client --query 'SELECT 1' && break; sleep 2; done
       - name: Load a slow dump
         env:
