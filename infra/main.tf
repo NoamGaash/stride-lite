@@ -266,13 +266,39 @@ resource "aws_s3_bucket" "backup" {
   }
 }
 
+# Public-read, like the archive it is built from: everything in it is already
+# public, and a node outside this account restores from it without a key of ours.
 resource "aws_s3_bucket_public_access_block" "backup" {
   count                   = var.backup_bucket_enabled ? 1 : 0
   bucket                  = aws_s3_bucket.backup[0].id
   block_public_acls       = true
-  block_public_policy     = true
+  block_public_policy     = false
   ignore_public_acls      = true
-  restrict_public_buckets = true
+  restrict_public_buckets = false
+}
+
+resource "aws_s3_bucket_policy" "backup_public_read" {
+  count      = var.backup_bucket_enabled ? 1 : 0
+  bucket     = aws_s3_bucket.backup[0].id
+  depends_on = [aws_s3_bucket_public_access_block.backup]
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = "s3:GetObject"
+        Resource  = "${aws_s3_bucket.backup[0].arn}/*"
+      },
+      {
+        Effect    = "Allow"
+        Principal = "*"
+        Action    = "s3:ListBucket"
+        Resource  = aws_s3_bucket.backup[0].arn
+      },
+    ]
+  })
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "backup" {
