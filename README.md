@@ -180,6 +180,8 @@ hours instead; `./up.sh 0` backfills nothing and only moves forward.
 filter marked `x-lookup: indexed` or `scan`. The mark is read from `db/schema.sql` and
 `db/projections.sql`, so it says what the database can actually find without a full read.
 
+To work on the code itself, open the repository in its dev container (`.devcontainer/`). It brings Node, Hurl, Terraform, the AWS CLI and the ClickHouse binary at CI's versions, and starts nothing until you run `./up.sh`.
+
 No Docker, no root, no credentials — the data is public. The resource ceilings are in
 [`ingest/local.xml`](ingest/local.xml) and exist because the reference machine for this
 project is somebody's workstation; on a dedicated host, raise them. The full reproduction, including the
