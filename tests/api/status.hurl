@@ -14,7 +14,8 @@ HTTP 200
 [Asserts]
 jsonpath "$" count == 1
 jsonpath "$[0].day" == "2025-03-14"
-jsonpath "$[0].snapshots" == 61
+jsonpath "$[0].snapshots" == 60
+jsonpath "$[0].empty_snapshots" == 1
 jsonpath "$[0].duplicate_ids" == 0
 jsonpath "$[0].rides" > 0
 jsonpath "$[0].rides_linked_to_gtfs" == 273
