@@ -137,7 +137,7 @@ jobs:
       - name: Expect the whole chain to be registered and healthy
         run: |
           n=$(./clickhouse client --query "SELECT count() FROM system.view_refreshes WHERE database='stride'")
-          test "$n" = 14 || { echo "got $n refreshable views, want 14"; exit 1; }
+          test "$n" = 15 || { echo "got $n refreshable views, want 15"; exit 1; }
           bad=$(./clickhouse client --query "SELECT count() FROM system.view_refreshes WHERE database='stride' AND exception != ''")
           test "$bad" = 0 || {
             ./clickhouse client --query "SELECT view, exception FROM system.view_refreshes WHERE exception != '' FORMAT Vertical"
