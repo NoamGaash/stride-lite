@@ -25,11 +25,46 @@
 --
 --   clickhouse client -d stride --multiquery < ingest/health.sql
 
+-- Every snapshot the requester wrote, empty ones included. siri_snapshot_seen
+-- is derived from inserted rows, so a snapshot with no vehicle in it never
+-- reaches it, and a quiet night read as a download cut short.
+CREATE TABLE IF NOT EXISTS siri_snapshot_listed
+(
+    siri_snapshot_id String
+)
+ENGINE = ReplacingMergeTree
+ORDER BY siri_snapshot_id;
+
+CREATE OR REPLACE VIEW siri_snapshot_listed_by_day AS
+SELECT toDate(parseDateTime(substring(siri_snapshot_id, 1, 10), '%Y/%m/%d')) AS day,
+       count() AS listed
+FROM siri_snapshot_listed FINAL
+GROUP BY day;
+
+-- Lists the newest measured day not listed yet, one day per run. Format One
+-- reads no file: a day costs two S3 LIST requests and no download. With
+-- nothing left to list, the prefix matches no key.
+CREATE OR REPLACE MATERIALIZED VIEW siri_snapshot_listing
+REFRESH EVERY 5 MINUTE
+APPEND TO siri_snapshot_listed AS
+SELECT DISTINCT replaceRegexpOne(_path, '^[^/]+/stride-siri-requester/(.*)\\.br$', '\\1') AS siri_snapshot_id
+FROM s3(
+    (SELECT concat('https://openbus-stride-public.s3.eu-west-1.amazonaws.com/stride-siri-requester/',
+                   ifNull(formatDateTime(maxOrNull(day), '%Y/%m/%d'), 'none'), '/*/*.br')
+     FROM ingest_day_health FINAL
+     WHERE snapshots > 0 AND day NOT IN (SELECT day FROM siri_snapshot_listed_by_day)),
+    NOSIGN, One)
+SETTINGS glob_expansion_max_elements = 9999999;
+
 CREATE OR REPLACE VIEW ingest_day_health_src AS
 SELECT
     {day:Date} AS day,
-    (SELECT count() FROM siri_snapshot_seen FINAL
-       WHERE siri_snapshot_id LIKE formatDateTime({day:Date}, '%Y/%m/%d') || '/%') AS snapshots,
+    (SELECT uniqExact(siri_snapshot_id) FROM (
+       SELECT siri_snapshot_id FROM siri_snapshot_seen
+       WHERE siri_snapshot_id LIKE formatDateTime({day:Date}, '%Y/%m/%d') || '/%'
+       UNION ALL
+       SELECT siri_snapshot_id FROM siri_snapshot_listed
+       WHERE siri_snapshot_id LIKE formatDateTime({day:Date}, '%Y/%m/%d') || '/%')) AS snapshots,
     loc.rows AS vehicle_locations,
     loc.rows - loc.ids AS duplicate_ids,
     rides.n AS rides,
@@ -66,13 +101,16 @@ SELECT * FROM ingest_day_health_src(day = today() - 1);
 -- The day above is measured before its rides are linked: ingest/gtfs-link.sql
 -- waits until two days later, so that first verdict counts no links. This is
 -- the day to measure again: the newest one whose verdict still says no ride was
--- linked although siri_ride_gtfs now links some. It also walks back through
+-- linked although siri_ride_gtfs now links some, or whose snapshot count is
+-- below what listing the bucket has since found. It also walks back through
 -- days measured during a backfill, one per run.
 CREATE OR REPLACE VIEW ingest_day_health_resettle AS
-WITH (SELECT maxOrNull(day) FROM ingest_day_health FINAL
-      WHERE rides_linked_to_gtfs = 0
-        AND day IN (SELECT DISTINCT journey_date FROM siri_ride_gtfs
-                    WHERE gtfs_ride_id IS NOT NULL)) AS unsettled
+WITH (SELECT maxOrNull(h.day) FROM ingest_day_health AS h FINAL
+      LEFT JOIN siri_snapshot_listed_by_day AS l ON l.day = h.day
+      WHERE (h.rides_linked_to_gtfs = 0
+             AND h.day IN (SELECT DISTINCT journey_date FROM siri_ride_gtfs
+                           WHERE gtfs_ride_id IS NOT NULL))
+         OR h.snapshots < l.listed) AS unsettled
 SELECT * FROM ingest_day_health_src(day = ifNull(unsettled, toDate(0)))
 WHERE unsettled IS NOT NULL;
 

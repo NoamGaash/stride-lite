@@ -87,6 +87,10 @@ load() {
   # In the order ingest runs them: the day is measured before its rides are
   # linked, and measured again once they are.
   ch --param_day="$DAY" --query "INSERT INTO ingest_day_health SELECT * FROM ingest_day_health_src(day = {day:Date})"
+  # What listing the bucket finds: every loaded snapshot, and 09:00, which the
+  # requester wrote with no vehicle in it and so left no row behind.
+  ch --query "INSERT INTO siri_snapshot_listed SELECT siri_snapshot_id FROM siri_snapshot_seen"
+  ch --query "INSERT INTO siri_snapshot_listed VALUES ('2025/03/14/09/00')"
   ch --param_day="$DAY" --query "INSERT INTO siri_ride_gtfs SELECT * FROM enrich_gtfs_link_src(from = {day:Date}, to = {day:Date})"
   ch --query "INSERT INTO ingest_day_health SELECT * FROM ingest_day_health_resettle"
   # gtfs_rides_agg_by_hour is derived and not shipped: refreshing it here is
