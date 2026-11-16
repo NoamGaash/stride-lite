@@ -91,6 +91,15 @@ jobs:
         env:
           CH_CLIENT: ./clickhouse client
         run: tests/gtfs-days.sh
+      - name: Back up and restore, signed with a static key
+        env:
+          CH_CLIENT: ./clickhouse client
+          S3: http://127.0.0.1:5000
+        run: |
+          pip install --quiet 'moto[server]'
+          moto_server -p 5000 > /dev/null 2>&1 &
+          for _ in $(seq 30); do curl -sf "$S3/moto-api/" > /dev/null && break; sleep 1; done
+          tests/backup.sh
 
   schema:
     # The schema has to apply to a clean ClickHouse, which is cheap to prove and

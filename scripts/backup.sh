@@ -15,7 +15,7 @@
 # billion rows; restoring reads a copy we already own, in our own region, and
 # costs Hasadna nothing. So the backup is not insurance, it is the first load.
 #
-# Credentials: none, anywhere. ClickHouse signs the S3 requests with a role it
+# Credentials on AWS: none. ClickHouse signs the S3 requests with a role it
 # assumes through extra_credentials(role_arn = …), and that role trusts the
 # instance role. Measured on 26.10: the one-argument S3() form is refused with
 # ACCESS_DENIED ("not allowed to use the server's own credentials") unless
@@ -24,6 +24,11 @@
 # identity signs only the STS AssumeRole call, and the assumed role's own
 # credentials sign every S3 request. So this needs no static key and no relaxed
 # setting.
+#
+# A node outside AWS has no instance role to assume through, so it signs with a
+# static key instead, from the standard AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY
+# that the aws CLI in scripts/first-load.sh reads as well. The query goes in on
+# stdin, so the secret never sits on a command line.
 set -euo pipefail
 
 ACTION=${1:?usage: backup.sh <save|restore> <s3-url>}
@@ -46,9 +51,11 @@ esac
 
 if [ -n "$BACKUP_ROLE_ARN" ]; then
   dest="S3('$URL', extra_credentials(role_arn = '$BACKUP_ROLE_ARN'))"
+elif [ -n "${AWS_ACCESS_KEY_ID:-}" ]; then
+  dest="S3('$URL', '$AWS_ACCESS_KEY_ID', '${AWS_SECRET_ACCESS_KEY:?AWS_ACCESS_KEY_ID is set without AWS_SECRET_ACCESS_KEY}')"
 else
-  echo "BACKUP_ROLE_ARN is unset: the request will be sent unsigned, which only" >&2
-  echo "works against a public bucket. See infra/main.tf for the role." >&2
+  echo "Neither BACKUP_ROLE_ARN nor AWS_ACCESS_KEY_ID is set: the request will be" >&2
+  echo "sent unsigned, which only works against a public bucket. See infra/main.tf." >&2
   dest="S3('$URL')"
 fi
 
@@ -61,7 +68,7 @@ case $ACTION in
     #
     # Not --async: the caller is a systemd unit or an operator who wants the
     # exit code to mean the backup is complete.
-    $CH --query "BACKUP DATABASE \`$CH_DB\` TO $dest"
+    $CH <<< "BACKUP DATABASE \`$CH_DB\` TO $dest"
     ;;
   restore)
     # allow_different_table_def because the tables are already there: the
@@ -69,9 +76,9 @@ case $ACTION in
     # since the backup was taken is a difference that matters not at all for
     # the data being restored into an empty table.
     if [ "$BACKUP_DB" = "$CH_DB" ]; then
-      $CH --query "RESTORE DATABASE \`$CH_DB\` FROM $dest SETTINGS allow_different_table_def = 1"
+      $CH <<< "RESTORE DATABASE \`$CH_DB\` FROM $dest SETTINGS allow_different_table_def = 1"
     else
-      $CH --query "RESTORE DATABASE \`$BACKUP_DB\` AS \`$CH_DB\` FROM $dest SETTINGS allow_different_table_def = 1"
+      $CH <<< "RESTORE DATABASE \`$BACKUP_DB\` AS \`$CH_DB\` FROM $dest SETTINGS allow_different_table_def = 1"
     fi
     ;;
   *)
