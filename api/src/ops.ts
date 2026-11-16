@@ -123,6 +123,31 @@ export async function readLogs(
   return Object.fromEntries(entries)
 }
 
+export type MemoryPressure = {
+  some_stalled_seconds: number
+  full_stalled_seconds: number
+  some_avg300_percent: number
+  full_avg300_percent: number
+}
+
+/**
+ * /proc/pressure/memory, host-wide since boot: `some` is time at least one task
+ * waited for memory, `full` time all of them did. Zero means RAM was never short.
+ */
+export function parseMemoryPressure(text: string): MemoryPressure | undefined {
+  const line = (kind: string) =>
+    text.match(new RegExp(`^${kind} avg10=[\\d.]+ avg60=[\\d.]+ avg300=([\\d.]+) total=(\\d+)$`, 'm'))
+  const some = line('some')
+  const full = line('full')
+  if (!some || !full) return undefined
+  return {
+    some_stalled_seconds: Number(some[2]) / 1e6,
+    full_stalled_seconds: Number(full[2]) / 1e6,
+    some_avg300_percent: Number(some[1]),
+    full_avg300_percent: Number(full[1]),
+  }
+}
+
 /** Columns whose text comes from outside our own SQL, and so goes through redact. */
 export const FREE_TEXT = new Set([
   'exception',
@@ -143,7 +168,7 @@ export function metricsSql(db: string): Record<string, string> {
   }
   return {
     server: `SELECT version() AS version, uptime() AS uptime_seconds,
-        ${["MemoryResident", "OSMemoryTotal", "OSMemoryAvailable", "LoadAverage1", "LoadAverage15"]
+        ${["MemoryResident", "MemoryResidentMax", "OSMemoryTotal", "OSMemoryAvailable", "LoadAverage1", "LoadAverage15"]
           .map((m) => `(SELECT value FROM system.asynchronous_metrics WHERE metric = '${m}') AS ${m}`)
           .join(',\n        ')}`,
     disks: `SELECT name, free_space, total_space, unreserved_space FROM system.disks`,

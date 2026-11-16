@@ -7,6 +7,7 @@ import {
   MAX_LINES,
   memo,
   metricsSql,
+  parseMemoryPressure,
   parseLogsQuery,
   parseRequestsQuery,
   readLogs,
@@ -226,5 +227,29 @@ describe('RequestStats', () => {
     expect(parseRequestsQuery(new URLSearchParams(''))).toBe('hour')
     expect(parseRequestsQuery(new URLSearchParams('window=week'))).toBe('week')
     expect(() => parseRequestsQuery(new URLSearchParams('window=year'))).toThrow()
+  })
+})
+
+describe('peak memory', () => {
+  /** The kernel's high-water mark of ClickHouse's resident memory, since it started. */
+  it('reads the resident peak alongside the current resident size', () => {
+    expect(metricsSql('stride').server).toContain("'MemoryResidentMax'")
+  })
+
+  /** /proc/pressure/memory: time some or all tasks stalled waiting for memory, since boot. */
+  it('turns the kernel memory pressure into seconds stalled', () => {
+    const text =
+      'some avg10=0.09 avg60=0.02 avg300=0.00 total=21051266\n' +
+      'full avg10=1.50 avg60=0.40 avg300=0.10 total=20783399\n'
+    expect(parseMemoryPressure(text)).toEqual({
+      some_stalled_seconds: 21.051266,
+      full_stalled_seconds: 20.783399,
+      some_avg300_percent: 0,
+      full_avg300_percent: 0.1,
+    })
+  })
+
+  it('give nothing for text that is not a pressure file', () => {
+    expect(parseMemoryPressure('')).toBeUndefined()
   })
 })

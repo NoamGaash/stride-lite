@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
-import { availableParallelism } from 'node:os'
+import { availableParallelism, uptime as hostUptime } from 'node:os'
+import { readFile } from 'node:fs/promises'
 import { gzip } from 'node:zlib'
 import { promisify } from 'node:util'
 import { query, scalar, ClickHouseError, Params, requestSignal } from './ch'
@@ -13,6 +14,7 @@ import { cacheControl, listEnds, windowEnd } from './cache'
 import {
   memo,
   metricsSql,
+  parseMemoryPressure,
   parseLogsQuery,
   parseRequestsQuery,
   readLogs,
@@ -226,6 +228,10 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<unknow
             out[name] = { error: 'query failed' }
           }
         }
+        const pressure = parseMemoryPressure(await readFile('/proc/pressure/memory', 'utf8').catch(() => ''))
+        out.memory_pressure = pressure
+          ? { ...pressure, host_uptime_seconds: Math.round(hostUptime()) }
+          : { error: 'unavailable' }
         out.api_requests_last_hour = requests.lastHour()
         return out
       })
