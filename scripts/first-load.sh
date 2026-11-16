@@ -221,7 +221,8 @@ backfill_the_gap() {
 }
 
 # The copy ages, and nothing here refreshes it: a node that restored does not
-# publish, so the backup stays as old as the instance that wrote it and a later
+# publish back to the bucket it restored from, so the backup stays as old as the
+# instance that wrote it and a later
 # instance has correspondingly more days to backfill. That is a cost in time and
 # not in correctness, and the fix when it matters is to run
 # `scripts/backup.sh save` by hand rather than to add a cron entry that rewrites
@@ -231,7 +232,9 @@ publish_backup() {
     echo "no bucket of ours to publish to; the next instance will rebuild from public data"
     return 0
   fi
-  if [ "$(state_of source)" = restore ]; then
+  # Restoring from one bucket and publishing to another is how a node seeds a
+  # new home for the backup from the old one.
+  if [ "$(state_of source)" = restore ] && [ "$BACKUP_PUBLISH" = "$BACKUP_URL" ]; then
     echo "this node was restored from $BACKUP_URL; the copy there is the one it came from"
     return 0
   fi
