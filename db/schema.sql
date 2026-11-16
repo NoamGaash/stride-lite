@@ -298,6 +298,7 @@ CREATE TABLE stride.ingest_day_health
 (
     `day` Date,
     `snapshots` UInt32,
+    `empty_snapshots` UInt32,
     `vehicle_locations` UInt64,
     `duplicate_ids` UInt64,
     `rides` UInt64,

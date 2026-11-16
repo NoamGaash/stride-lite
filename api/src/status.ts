@@ -44,6 +44,7 @@ export function statusSql(db: string): string {
 export const COVERAGE_FIELDS = [
   'day',
   'snapshots',
+  'empty_snapshots',
   'vehicle_locations',
   'duplicate_ids',
   'rides',
