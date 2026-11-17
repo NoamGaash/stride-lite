@@ -286,12 +286,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Bootstrap
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           set -o pipefail
           truncate -s 4G "$RUNNER_TEMP/data.img"
           dev=$(sudo losetup --find --show "$RUNNER_TEMP/data.img")
           sudo cp -r "$GITHUB_WORKSPACE" /opt/stride-lite
-          sudo DATA_DEVICE="$dev" START_FIRST_LOAD=0 \
+          sudo DATA_DEVICE="$dev" START_FIRST_LOAD=0 BRANCH="$BRANCH" \
             AWS_ACCESS_KEY_ID=AKIABOOTSTRAPTEST001 AWS_SECRET_ACCESS_KEY=bootstrap-test-secret \
             bash scripts/bootstrap-node.sh 2>&1 | tee "$RUNNER_TEMP/bootstrap.log"
       - name: The node is up
@@ -307,17 +309,20 @@ jobs:
             echo "the secret is in the bootstrap log"; exit 1
           fi
           systemctl is-active stride-deploy.timer
-      - name: The timer's deploy brings the node to main
-        # The checkout here is this PR, so main is a commit the node has not
-        # deployed, and the run below is a real scripts/deploy.sh.
+      - name: The timer's deploy brings the node to the branch's head
+        # The checkout here is the merge commit actions/checkout makes, so the
+        # branch's head is a commit the node has not deployed, and the run below
+        # is a real scripts/deploy.sh.
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
           sudo systemctl start stride-deploy.service || { sudo journalctl -u stride-deploy --no-pager | tail -40; exit 1; }
-          main=$(git ls-remote origin refs/heads/main | cut -f1)
-          test "$(sudo cat /var/lib/stride-deploy/deployed)" = "$main"
+          head=$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)
+          test "$(sudo cat /var/lib/stride-deploy/deployed)" = "$head"
           curl -fsS http://127.0.0.1/healthz
           sudo systemctl start stride-deploy.service
           sudo journalctl -u stride-deploy --no-pager | tail -5
-          test "$(sudo journalctl -u stride-deploy --no-pager | grep -c 'deploying main')" = 1
+          test "$(sudo journalctl -u stride-deploy --no-pager | grep -c 'deploying ')" = 1
 
   terraform:
     runs-on: ubuntu-latest
