@@ -29,7 +29,7 @@ units_changed=0
 for f in "$SRC"/clickhouse-server/*; do
   put "$f" "/etc/clickhouse-server/$(basename "$f")" && clickhouse_changed=1
 done
-for f in "$SRC"/systemd/*.service; do
+for f in "$SRC"/systemd/*.service "$SRC"/systemd/*.timer; do
   if put "$f" "/etc/systemd/system/$(basename "$f")"; then
     units_changed=1
     [ "$(basename "$f")" = clickhouse.service ] && clickhouse_changed=1
@@ -41,6 +41,7 @@ done
 
 [ "$units_changed" = 0 ] || $SYSTEMCTL daemon-reload
 $SYSTEMCTL enable clickhouse stride-api stride-first-load
+$SYSTEMCTL enable --now stride-deploy.timer
 
 if [ "$clickhouse_changed" = 1 ] && [ "${RESTART_CHANGED:-0}" = 1 ]; then
   $SYSTEMCTL restart clickhouse

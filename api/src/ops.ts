@@ -28,6 +28,7 @@ export const LOG_SOURCES: Record<string, Source> = {
   'first-load': { file: '/var/log/stride-first-load.log' },
   catchup: { file: '/var/log/stride-catchup.log' },
   gtfs: { file: '/var/log/stride-gtfs.log' },
+  deploy: { unit: 'stride-deploy' },
   clickhouse: { file: '/var/log/clickhouse-server/clickhouse.log' },
   api: { unit: 'stride-api' },
 }

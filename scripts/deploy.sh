@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Brings a running node up to a commit. Runs on the instance, sent by SSM from
-# .github/workflows/deploy.yml.
+# Brings a running node up to a commit. Runs on the node, sent by SSM from
+# .github/workflows/deploy.yml or started by scripts/auto-deploy.sh.
 #
 # infra/bootstrap.sh is user_data, so it runs once per instance launch: it is how
 # a node is born, not how it is updated. `user_data_replace_on_change = false` is
@@ -14,6 +14,11 @@ BRANCH=${BRANCH:-main}
 LOCK=${FIRST_LOAD_LOCK:-/var/lock/stride-catchup}
 export CH_DB=${CH_DB:-stride}
 export CH_CLIENT=${CH_CLIENT:-clickhouse client}
+DEPLOY_STATE=${DEPLOY_STATE:-/var/lib/stride-deploy/deployed}
+
+# One deploy at a time, whichever of SSM and the timer started it.
+exec 8> /var/lock/stride-deploy
+flock 8
 
 cd "$REPO"
 # The instance clones --depth 1, so fetch the same way and move to it.
@@ -54,6 +59,7 @@ if flock -w 600 9; then
 else
   echo "another ingest run holds $LOCK after ten minutes of waiting:"
   echo "updating the code only, and leaving the schema to the next deploy."
+  schema_left=1
   systemctl status stride-first-load --no-pager || true
 fi 9> "$LOCK"
 
@@ -76,3 +82,10 @@ clickhouse client --query "
 test "$(clickhouse client --query "
   SELECT count() FROM system.view_refreshes
   WHERE database = '$CH_DB' AND exception != ''")" = 0
+
+# Not recorded when the schema was left for later, so scripts/auto-deploy.sh
+# tries this commit again on its next tick instead of counting it done.
+if [ "${schema_left:-0}" = 0 ]; then
+  mkdir -p "$(dirname "$DEPLOY_STATE")"
+  git rev-parse HEAD > "$DEPLOY_STATE"
+fi
