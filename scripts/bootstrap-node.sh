@@ -92,7 +92,7 @@ set +x
 install -d /etc/stride-lite
 install -m 0600 /dev/null /etc/stride-lite/node.env
 AWS_REGION=${AWS_REGION:-us-east-1}
-for name in AWS_REGION BACKUP_URL BACKUP_PUBLISH BACKUP_ROLE_ARN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+for name in BRANCH AWS_REGION BACKUP_URL BACKUP_PUBLISH BACKUP_ROLE_ARN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
   if [ -n "${!name:-}" ]; then echo "$name=${!name}" >> /etc/stride-lite/node.env; fi
 done
 set -x
@@ -124,4 +124,8 @@ if [ "${START_FIRST_LOAD:-1}" != 0 ]; then
   systemctl start --no-block stride-first-load
 fi
 
+# What is checked out is what is installed, so scripts/auto-deploy.sh starts
+# from here rather than deploying the same commit again.
+install -d /var/lib/stride-deploy
+git rev-parse HEAD > /var/lib/stride-deploy/deployed
 echo "bootstrap complete" > /var/log/stride-bootstrap.done

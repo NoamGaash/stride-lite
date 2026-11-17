@@ -47,6 +47,9 @@ run
 cmp -s infra/node/systemd/stride-api.service "$ROOT/etc/systemd/system/stride-api.service" \
   || fail "the stale stride-api.service was left in place"
 grep -qx daemon-reload "$CALLS" || fail "a changed unit was installed without daemon-reload"
+cmp -s infra/node/systemd/stride-deploy.timer "$ROOT/etc/systemd/system/stride-deploy.timer" \
+  || fail "the deploy timer was not installed"
+grep -qx 'enable --now stride-deploy.timer' "$CALLS" || fail "the deploy timer was not started"
 grep -q 'restart clickhouse' "$CALLS" && fail "restarted ClickHouse although none of its files changed"
 
 run
@@ -62,8 +65,8 @@ rm "$ROOT/etc/cron.d/stride-gtfs"
 run
 cmp -s infra/node/cron/stride-gtfs "$ROOT/etc/cron.d/stride-gtfs" || fail "a missing cron entry was not installed"
 
-grep -qE '^cat > /etc/(systemd|cron\.d|clickhouse-server)/' infra/bootstrap.sh \
-  && fail "infra/bootstrap.sh still writes node config itself; it belongs in infra/node"
+grep -qE '^cat > /etc/(systemd|cron\.d|clickhouse-server)/' infra/bootstrap.sh scripts/bootstrap-node.sh \
+  && fail "the bootstrap still writes node config itself; it belongs in infra/node"
 grep -q 'install-node-config.sh' scripts/deploy.sh || fail "scripts/deploy.sh does not install the node config"
 
 echo ok

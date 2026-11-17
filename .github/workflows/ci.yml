@@ -306,6 +306,18 @@ jobs:
           if grep -q bootstrap-test-secret "$RUNNER_TEMP/bootstrap.log"; then
             echo "the secret is in the bootstrap log"; exit 1
           fi
+          systemctl is-active stride-deploy.timer
+      - name: The timer's deploy brings the node to main
+        # The checkout here is this PR, so main is a commit the node has not
+        # deployed, and the run below is a real scripts/deploy.sh.
+        run: |
+          sudo systemctl start stride-deploy.service
+          main=$(git ls-remote origin refs/heads/main | cut -f1)
+          test "$(sudo cat /var/lib/stride-deploy/deployed)" = "$main"
+          curl -fsS http://127.0.0.1/healthz
+          sudo systemctl start stride-deploy.service
+          sudo journalctl -u stride-deploy --no-pager | tail -5
+          test "$(sudo journalctl -u stride-deploy --no-pager | grep -c 'deploying main')" = 1
 
   terraform:
     runs-on: ubuntu-latest
@@ -328,6 +340,8 @@ jobs:
       - name: Node config follows the repository on every deploy
         working-directory: .
         run: tests/install-node-config.sh
+      - name: The timer deploys main when it moves, once, and retries a failure
+        run: tests/auto-deploy.sh
 
   differential:
     # Compares endpoints against the live production API, which is a non-profit's

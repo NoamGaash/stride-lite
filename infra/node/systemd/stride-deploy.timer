@@ -1,0 +1,10 @@
+[Unit]
+Description=Look for a new commit to deploy every five minutes
+
+[Timer]
+OnBootSec=5min
+# Counted from the end of the last run, so a long deploy is never overlapped.
+OnUnitInactiveSec=5min
+
+[Install]
+WantedBy=timers.target
