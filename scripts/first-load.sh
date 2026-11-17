@@ -176,7 +176,8 @@ backup_exists() {
   prefix=${rest#*/}
   [ "$prefix" = "$bucket" ] && prefix=""
   local n
-  n=$(aws s3api list-objects-v2 --bucket "$bucket" --prefix "$prefix" \
+  n=$(aws s3api list-objects-v2 --region "$(./scripts/bucket-region.sh "$bucket")" \
+        --bucket "$bucket" --prefix "$prefix" \
         --max-keys 1 --query 'length(Contents)' --output text 2> /dev/null || echo None)
   [ "$n" != None ] && [ "$n" != 0 ]
 }

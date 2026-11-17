@@ -41,11 +41,12 @@ BACKUP_DB=${BACKUP_DB:-$CH_DB}
 BACKUP_ROLE_ARN=${BACKUP_ROLE_ARN:-}
 AWS_REGION=${AWS_REGION:-us-east-1}
 
-# ClickHouse's S3 backup engine takes an endpoint URL, not an s3:// one.
+# ClickHouse's S3 backup engine takes an endpoint URL, not an s3:// one, in the
+# bucket's own region: a node restores from one bucket and publishes to another.
 case $URL in
   s3://*)
     rest=${URL#s3://}
-    URL="https://${rest%%/*}.s3.$AWS_REGION.amazonaws.com/${rest#*/}"
+    URL="https://${rest%%/*}.s3.$("$(dirname "$0")/bucket-region.sh" "${rest%%/*}").amazonaws.com/${rest#*/}"
     ;;
 esac
 
