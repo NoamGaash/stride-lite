@@ -311,7 +311,7 @@ jobs:
         # The checkout here is this PR, so main is a commit the node has not
         # deployed, and the run below is a real scripts/deploy.sh.
         run: |
-          sudo systemctl start stride-deploy.service
+          sudo systemctl start stride-deploy.service || { sudo journalctl -u stride-deploy --no-pager | tail -40; exit 1; }
           main=$(git ls-remote origin refs/heads/main | cut -f1)
           test "$(sudo cat /var/lib/stride-deploy/deployed)" = "$main"
           curl -fsS http://127.0.0.1/healthz
@@ -341,6 +341,7 @@ jobs:
         working-directory: .
         run: tests/install-node-config.sh
       - name: The timer deploys main when it moves, once, and retries a failure
+        working-directory: .
         run: tests/auto-deploy.sh
 
   differential:
