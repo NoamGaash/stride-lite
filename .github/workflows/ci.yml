@@ -276,6 +276,35 @@ jobs:
           ./clickhouse client --database stride --multiquery < db/views.sql
           test "$(interval)" = "$before" || { echo "did not restore"; exit 1; }
 
+  bootstrap-ubuntu:
+    # The node bootstrap the way a server outside AWS runs it, on Ubuntu with
+    # systemd: a loop device stands in for the data disk, and the first load,
+    # which would read 150 GB, stays off.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bootstrap
+        run: |
+          set -o pipefail
+          truncate -s 4G "$RUNNER_TEMP/data.img"
+          dev=$(sudo losetup --find --show "$RUNNER_TEMP/data.img")
+          sudo cp -r "$GITHUB_WORKSPACE" /opt/stride-lite
+          sudo DATA_DEVICE="$dev" START_FIRST_LOAD=0 \
+            AWS_ACCESS_KEY_ID=AKIABOOTSTRAPTEST001 AWS_SECRET_ACCESS_KEY=bootstrap-test-secret \
+            bash scripts/bootstrap-node.sh 2>&1 | tee "$RUNNER_TEMP/bootstrap.log"
+      - name: The node is up
+        run: |
+          systemctl is-active clickhouse stride-api cron
+          for _ in $(seq 30); do curl -fsS http://127.0.0.1/healthz && break; sleep 2; done
+          curl -fsS http://127.0.0.1/healthz
+          findmnt /var/lib/clickhouse
+          test -f /etc/cron.d/stride-catchup
+          test "$(sudo stat -c %a /etc/stride-lite/node.env)" = 600
+          sudo grep -q '^AWS_ACCESS_KEY_ID=AKIABOOTSTRAPTEST001$' /etc/stride-lite/node.env
+          if grep -q bootstrap-test-secret "$RUNNER_TEMP/bootstrap.log"; then
+            echo "the secret is in the bootstrap log"; exit 1
+          fi
+
   terraform:
     runs-on: ubuntu-latest
     defaults:
