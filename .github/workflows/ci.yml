@@ -96,6 +96,8 @@ jobs:
         env:
           CH_CLIENT: ./clickhouse client
         run: tests/gtfs-days.sh
+      - name: s3:// URLs resolve in their own bucket's region
+        run: tests/bucket-region.sh
       - name: Back up and restore, signed with a static key
         env:
           CH_CLIENT: ./clickhouse client
