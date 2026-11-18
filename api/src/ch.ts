@@ -60,10 +60,21 @@ export class ClickHouseError extends Error {
   constructor(
     message: string,
     readonly sql: string,
+    readonly type?: string,
   ) {
     super(message)
   }
 }
+
+/** The limits above, which a visitor can get under by asking for less. */
+const LIMIT_TYPES = new Set(['MEMORY_LIMIT_EXCEEDED', 'TIMEOUT_EXCEEDED'])
+
+export const failureDetail = (err: ClickHouseError): string =>
+  err.type && LIMIT_TYPES.has(err.type)
+    ? `The query is too broad: it needs more than the ${MAX_QUERY_SECONDS} s and ` +
+      `${MAX_QUERY_BYTES / 1024 ** 3} GiB one request may use. Narrow it with a filter ` +
+      `or a shorter date range.`
+    : 'query failed'
 
 /**
  * The values a query is built from, sent beside its text rather than spliced
@@ -127,7 +138,7 @@ async function run<R>(
     // The client words an abort as a plain Error; the signal's own reason is
     // the AbortError that callers check for.
     if (signal?.aborted) throw signal.reason
-    if (err instanceof OfficialError) throw new ClickHouseError(err.message.slice(0, 2000), sql)
+    if (err instanceof OfficialError) throw new ClickHouseError(err.message.slice(0, 2000), sql, err.type)
     throw err
   }
 }

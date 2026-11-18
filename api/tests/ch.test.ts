@@ -1,6 +1,8 @@
+import { ClickHouseError as OfficialError } from '@clickhouse/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   client,
+  failureDetail,
   MAX_QUERY_BYTES,
   MAX_QUERY_SECONDS,
   query,
@@ -61,5 +63,32 @@ describe('query', () => {
   /** The client's own socket timeout must not cut ClickHouse off before its timeout error arrives. */
   it('waits for ClickHouse to time a query out itself', () => {
     expect(REQUEST_TIMEOUT_MS).toBeGreaterThan(MAX_QUERY_SECONDS * 1000)
+  })
+})
+
+describe('failureDetail', () => {
+  const failWith = (type: string) =>
+    vi.spyOn(client, 'query').mockRejectedValue(
+      new OfficialError({ message: `Code: 1. DB::Exception: ${type}`, code: '1', type }),
+    )
+
+  /** The query an unfiltered /stop_arrivals/list runs: production times out on it too. */
+  it('tells a visitor whose query ran out of memory to narrow it', async () => {
+    failWith('MEMORY_LIMIT_EXCEEDED')
+    const err = await query('SELECT 1').catch((e) => e)
+    expect(failureDetail(err)).toMatch(/too broad.*filter/i)
+  })
+
+  it('tells a visitor whose query ran out of time to narrow it', async () => {
+    failWith('TIMEOUT_EXCEEDED')
+    const err = await query('SELECT 1').catch((e) => e)
+    expect(failureDetail(err)).toMatch(/too broad.*filter/i)
+  })
+
+  /** Anything else is this API's own bug, not something the visitor can fix. */
+  it('keeps other failures generic', async () => {
+    failWith('UNKNOWN_IDENTIFIER')
+    const err = await query('SELECT 1').catch((e) => e)
+    expect(failureDetail(err)).toBe('query failed')
   })
 })
