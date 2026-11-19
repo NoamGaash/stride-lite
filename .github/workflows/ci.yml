@@ -310,12 +310,13 @@ jobs:
           fi
           systemctl is-active stride-deploy.timer
       - name: The timer's deploy brings the node to the branch's head
-        # The checkout here is the merge commit actions/checkout makes, so the
-        # branch's head is a commit the node has not deployed, and the run below
-        # is a real scripts/deploy.sh.
+        # The bootstrap recorded the checkout as deployed. On a pull request that is
+        # the merge commit, but on a push it is the branch's head itself, so forget
+        # it: either way the run below is then a real scripts/deploy.sh.
         env:
           BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
+          echo none | sudo tee /var/lib/stride-deploy/deployed
           sudo systemctl start stride-deploy.service || { sudo journalctl -u stride-deploy --no-pager | tail -40; exit 1; }
           head=$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)
           test "$(sudo cat /var/lib/stride-deploy/deployed)" = "$head"
