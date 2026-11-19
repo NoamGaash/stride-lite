@@ -3,7 +3,7 @@ import { availableParallelism, uptime as hostUptime } from 'node:os'
 import { readFile } from 'node:fs/promises'
 import { gzip } from 'node:zlib'
 import { promisify } from 'node:util'
-import { query, scalar, ClickHouseError, Params, requestSignal } from './ch'
+import { query, scalar, ClickHouseError, failureDetail, Params, requestSignal } from './ch'
 import { buildQuery, BadRequest, BadInput, TzRequired, UnknownOrderField } from './sql'
 import { endpoints, getEndpoints } from './registry'
 import { rawEndpoints, wrap, type RawEndpointDef } from './raw'
@@ -292,7 +292,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<unknow
       return await send(500, { message: err.message })
     if (err instanceof ClickHouseError) {
       console.error('clickhouse error for sql:\n', err.sql, '\n', err.message)
-      return await send(500, { detail: 'query failed' })
+      return await send(500, { detail: failureDetail(err) })
     }
     // The visitor left and took the query with them; there is no one to answer.
     if (err instanceof Error && err.name === 'AbortError') return
