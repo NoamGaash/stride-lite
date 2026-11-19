@@ -29,6 +29,7 @@ sed "s/^CREATE TABLE stride\./CREATE TABLE IF NOT EXISTS $CH_DB./" "$here/../db/
 $CH --database "$CH_DB" --multiquery < "$here/../db/raw.sql"
 CH_CLIENT="$CH" CH_DB="$CH_DB" "$here/migrate.sh"
 $CH --database "$CH_DB" --multiquery < "$here/../db/views.sql"
+$CH --database "$CH_DB" --multiquery < "$here/../db/node-metrics.sql"
 # PROJECTIONS=0 skips all of it. bootstrap.sh passes that because a projection
 # declared before the first load is built during the insert, over parts not yet
 # merged: on the 344 GB node, gtfs_ride_stop alone reached ~95 GB of data plus

@@ -123,10 +123,10 @@ jobs:
         env:
           CH_CLIENT: ./clickhouse client
         run: ./scripts/apply-schema.sh
-      - name: Expect the 16 tables, siri_ride_duration, siri_ride_gtfs, backfill_progress, the landing table, the aggregation table and its refresh, and the migration record
+      - name: Expect the 16 tables, siri_ride_duration, siri_ride_gtfs, backfill_progress, the landing table, the aggregation table and its refresh, the migration record, and node_metrics and its refresh
         run: |
           n=$(./clickhouse client --query "SELECT count() FROM system.tables WHERE database='stride'")
-          test "$n" = 24 || { echo "got $n tables, want 24"; exit 1; }
+          test "$n" = 26 || { echo "got $n tables, want 26"; exit 1; }
 
       - name: Expect apply-schema to be idempotent
         run: ./scripts/apply-schema.sh
