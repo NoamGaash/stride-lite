@@ -45,7 +45,7 @@
       "Resource": "arn:aws:s3:::stride-lite-backup-*"
     },
     {
-      "Sid": "TheSiriSnapshotsBucket",
+      "Sid": "TheMotArchiveBucket",
       "Effect": "Allow",
       "Action": [
         "s3:CreateBucket",
