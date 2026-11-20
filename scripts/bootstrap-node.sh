@@ -39,14 +39,14 @@ mount -a
 
 # ---- packages --------------------------------------------------------------
 if command -v dnf >/dev/null; then
-  dnf install -y git tar zstd unzip cronie
+  dnf install -y git tar zstd unzip cronie brotli
   systemctl enable --now crond
   curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
   dnf install -y nodejs
 else
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y git tar zstd unzip cron curl ca-certificates
+  apt-get install -y git tar zstd unzip cron curl ca-certificates brotli
   systemctl enable --now cron
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   apt-get install -y nodejs
@@ -83,7 +83,6 @@ install -d -o clickhouse -g clickhouse /etc/clickhouse-server /var/log/clickhous
 [ -d "$REPO/.git" ] || git clone --branch "$BRANCH" --depth 1 https://github.com/NoamGaash/stride-lite "$REPO"
 cd "$REPO"
 (cd api && npm ci --omit=dev)
-./scripts/install-requester.sh || echo "the SIRI requester did not install; the API goes on without it"
 
 # What only this node knows, for the units in infra/node to read. Everything
 # else on the node — ClickHouse's config, the units, the cron entries — comes

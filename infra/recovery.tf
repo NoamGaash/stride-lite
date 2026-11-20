@@ -1,8 +1,8 @@
 # A node that stops answering is rebooted, and one whose host fails is moved to
 # new hardware. Either way it is the same instance: the Elastic IP the Ministry
-# allowlists and the data volume stay attached. Inside the node, systemd and
-# scripts/requester-watchdog.sh handle a requester that dies or hangs; these
-# handle the node itself.
+# allowlists and the data volume stay attached. Inside the node, a requester run
+# that hangs is ended by its unit's timeout and the next minute's starts fresh;
+# these handle the node itself.
 #
 # Evaluation periods per AWS's own advice: three minutes for reboot and two for
 # recover, so the two never race. Missing data is not a failure, because these

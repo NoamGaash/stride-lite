@@ -50,7 +50,7 @@ grep -qx daemon-reload "$CALLS" || fail "a changed unit was installed without da
 cmp -s infra/node/systemd/stride-deploy.timer "$ROOT/etc/systemd/system/stride-deploy.timer" \
   || fail "the deploy timer was not installed"
 grep -qx 'enable --now stride-deploy.timer' "$CALLS" || fail "the deploy timer was not started"
-grep -qx 'enable --now siri-requester-watchdog.timer' "$CALLS" || fail "the requester watchdog was not started"
+grep -qx 'enable --now siri-requester.timer' "$CALLS" || fail "the requester timer was not started"
 grep -q 'restart clickhouse' "$CALLS" && fail "restarted ClickHouse although none of its files changed"
 
 run

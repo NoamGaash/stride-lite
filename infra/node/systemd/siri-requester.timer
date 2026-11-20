@@ -1,0 +1,9 @@
+[Unit]
+Description=Ask for a SIRI snapshot at the start of every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

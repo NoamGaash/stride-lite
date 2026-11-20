@@ -1,28 +1,21 @@
 [Unit]
-Description=SIRI requester: a snapshot a minute from the Ministry of Transport, to S3
+Description=SIRI requester: this minute's snapshot from the Ministry of Transport, to S3
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-# Defaults; /etc/stride-lite/node.env overrides them. The Ministry answers only an
-# allowlisted address with a key of its own, so without OPEN_BUS_MOT_KEY there is
-# nothing to run.
-Environment=OPEN_BUS_SIRI_STORAGE_ROOTPATH=/var/lib/siri-requester
-Environment=OPEN_BUS_S3_BUCKET=openbus-siri-snapshots
-Environment=PYTHONUNBUFFERED=1
+Type=oneshot
 EnvironmentFile=-/etc/stride-lite/node.env
 StateDirectory=siri-requester
+# The Ministry answers only an allowlisted address with a key of its own, so
+# until OPEN_BUS_MOT_KEY is in node.env each run is skipped, not failed.
 ExecCondition=/bin/sh -c 'test -n "$$OPEN_BUS_MOT_KEY"'
-# The pinned boto3 predates AWS_REGION and reads only AWS_DEFAULT_REGION.
-ExecStart=/bin/sh -c 'AWS_DEFAULT_REGION="$${AWS_REGION:-us-east-1}" exec /opt/siri-requester/venv/bin/open-bus-siri-requester daemon-start'
-Restart=always
-RestartSec=10
+ExecStart=/opt/stride-lite/scripts/siri-request.sh
+# A run that has not finished by the next minute's is hung; this ends it.
+TimeoutStartSec=58
 
 # It shares the node with ClickHouse. When memory runs out the kernel kills
 # ClickHouse and not this, and under load a minute's request still goes out on time.
 OOMScoreAdjust=-1000
 MemoryMin=64M
 CPUWeight=1000
-
-[Install]
-WantedBy=multi-user.target

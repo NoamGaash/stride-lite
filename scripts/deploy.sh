@@ -26,7 +26,8 @@ git fetch --depth 1 origin "$BRANCH"
 git reset --hard FETCH_HEAD
 
 (cd api && npm ci --omit=dev)
-./scripts/install-requester.sh || echo "the SIRI requester did not install; the API goes on without it"
+# scripts/siri-request.sh compresses with it; bootstrap installs it on a new node.
+command -v brotli >/dev/null || { command -v dnf >/dev/null && dnf install -y brotli || apt-get install -y brotli; }
 RESTART_CHANGED=1 ./scripts/install-node-config.sh
 
 # Everything past this point writes to the database, and scripts/first-load.sh
