@@ -4,6 +4,8 @@
 #                                infra/node/systemd/siri-requester.service.
 #                                Hasadna's per-minute layout has no room for
 #                                the seconds.
+#   gtfs/YYYY/MM/DD/<file>       the Ministry's GTFS files, both formats, by the
+#                                day it published them; scripts/gtfs-archive.sh.
 # docs/REQUESTER.md is why this node asks the Ministry itself at all.
 resource "aws_s3_bucket" "mot_archive" {
   bucket = "openbus-mot-archive"
@@ -55,6 +57,21 @@ resource "aws_iam_role_policy" "instance_mot_archive_siri" {
       Effect   = "Allow"
       Action   = "s3:PutObject"
       Resource = "${aws_s3_bucket.mot_archive.arn}/siri/*"
+    }]
+  })
+}
+
+# Adding GTFS files. Abort, because a 300 MB upload goes up in parts.
+resource "aws_iam_role_policy" "instance_mot_archive_gtfs" {
+  name = "stride-lite-mot-archive-gtfs"
+  role = aws_iam_role.instance.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["s3:PutObject", "s3:AbortMultipartUpload"]
+      Resource = "${aws_s3_bucket.mot_archive.arn}/gtfs/*"
     }]
   })
 }

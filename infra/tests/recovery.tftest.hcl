@@ -49,6 +49,10 @@ run "recovery" {
   }
   assert {
     condition     = jsondecode(aws_iam_role_policy.instance_mot_archive_siri.policy).Statement[0].Action == "s3:PutObject"
-    error_message = "the instance may do more to the snapshots bucket than add to it"
+    error_message = "the instance may do more to the archive's SIRI than add to it"
+  }
+  assert {
+    condition     = toset(jsondecode(aws_iam_role_policy.instance_mot_archive_gtfs.policy).Statement[0].Action) == toset(["s3:PutObject", "s3:AbortMultipartUpload"])
+    error_message = "the instance may do more to the archive's GTFS than add to it"
   }
 }
