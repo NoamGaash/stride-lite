@@ -1,6 +1,7 @@
-# Where infra/node/systemd/siri-requester.service writes, in the same layout as
-# Hasadna's openbus-stride-public/stride-siri-requester/, so the ingest can read
-# either. Public-read like that bucket, since the snapshots are public data.
+# Where infra/node/systemd/siri-requester.service writes a snapshot every 15
+# seconds, at snapshots/YYYY/MM/DD/HH/MM/SS.br: Hasadna's per-minute layout has
+# no room for the seconds. Public-read like openbus-stride-public, since the
+# snapshots are public data.
 # docs/REQUESTER.md is why a second requester exists at all.
 resource "aws_s3_bucket" "siri_snapshots" {
   bucket = "openbus-siri-snapshots"
@@ -51,7 +52,7 @@ resource "aws_iam_role_policy" "instance_siri_snapshots" {
     Statement = [{
       Effect   = "Allow"
       Action   = "s3:PutObject"
-      Resource = "${aws_s3_bucket.siri_snapshots.arn}/stride-siri-requester/*"
+      Resource = "${aws_s3_bucket.siri_snapshots.arn}/snapshots/*"
     }]
   })
 }

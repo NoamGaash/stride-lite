@@ -1,5 +1,5 @@
 [Unit]
-Description=SIRI requester: this minute's snapshot from the Ministry of Transport, to S3
+Description=SIRI requester: the current snapshot from the Ministry of Transport, to S3
 After=network-online.target
 Wants=network-online.target
 
@@ -11,11 +11,11 @@ StateDirectory=siri-requester
 # until OPEN_BUS_MOT_KEY is in node.env each run is skipped, not failed.
 ExecCondition=/bin/sh -c 'test -n "$$OPEN_BUS_MOT_KEY"'
 ExecStart=/opt/stride-lite/scripts/siri-request.sh
-# A run that has not finished by the next minute's is hung; this ends it.
-TimeoutStartSec=58
+# A run still going when the next one is due is hung; this ends it.
+TimeoutStartSec=14
 
 # It shares the node with ClickHouse. When memory runs out the kernel kills
-# ClickHouse and not this, and under load a minute's request still goes out on time.
+# ClickHouse and not this, and under load each request still goes out on time.
 OOMScoreAdjust=-1000
 MemoryMin=64M
 CPUWeight=1000

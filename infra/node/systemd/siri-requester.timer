@@ -1,8 +1,8 @@
 [Unit]
-Description=Ask for a SIRI snapshot at the start of every minute
+Description=Ask for a SIRI snapshot every 15 seconds
 
 [Timer]
-OnCalendar=*-*-* *:*:00
+OnCalendar=*-*-* *:*:00/15
 AccuracySec=1s
 
 [Install]

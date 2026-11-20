@@ -35,42 +35,50 @@ snapshot() { # a response the Ministry generated $1 seconds ago
 }
 run() {
   : > "$DIR/curl.calls"
-  PATH=$DIR/bin:$PATH OPEN_BUS_MOT_KEY=secret-key SIRI_BUCKET=b SIRI_SPOOL=$DIR/spool SIRI_RETRY_WAIT=0 \
+  PATH=$DIR/bin:$PATH OPEN_BUS_MOT_KEY=secret-key SIRI_BUCKET=b SIRI_SPOOL=$DIR/spool \
     SNAPSHOT_ID=$1 ./scripts/siri-request.sh >/dev/null 2>&1
 }
-stored() { [ -f "$DIR/s3/b/stride-siri-requester/$1.br" ]; }
+stored() { [ -f "$DIR/s3/b/snapshots/$1.br" ]; }
 
 snapshot 5 > "$DIR/mot/moran.mot.gov.il"
-run 2026/11/21/10/00 || fail "a good answer from the main server failed"
-stored 2026/11/21/10/00 || fail "a good answer was not uploaded under its minute"
-grep -q '"MonitoredStopVisit"' "$DIR/s3/b/stride-siri-requester/2026/11/21/10/00.br" || fail "the stored snapshot is not the answer"
+run 2026/11/21/10/00/00 || fail "a good answer from the main server failed"
+stored 2026/11/21/10/00/00 || fail "a good answer was not uploaded under its moment"
+grep -q '"MonitoredStopVisit"' "$DIR/s3/b/snapshots/2026/11/21/10/00/00.br" || fail "the stored snapshot is not the answer"
 [ -z "$(ls -A "$DIR/spool")" ] || fail "a snapshot that reached S3 was kept locally"
 
 rm "$DIR/mot/moran.mot.gov.il"; snapshot 5 > "$DIR/mot/moran-t.mot.gov.il"
-run 2026/11/21/10/01 || fail "the fallback server's answer was not used"
-stored 2026/11/21/10/01 || fail "the fallback's answer was not uploaded"
+run 2026/11/21/10/00/10 || fail "the fallback server's answer was not used"
+stored 2026/11/21/10/00/10 || fail "the fallback's answer was not uploaded"
 
-# An answer is the Ministry's newest only if it is recent; an old one is not this minute.
+# An answer is the Ministry's newest only if it is recent; an old one is not this moment's.
 snapshot 600 > "$DIR/mot/moran.mot.gov.il"; snapshot 600 > "$DIR/mot/moran-t.mot.gov.il"
-run 2026/11/21/10/02 && fail "a ten-minute-old answer was accepted"
-stored 2026/11/21/10/02 && fail "a ten-minute-old answer was uploaded"
-[ "$(grep -c . "$DIR/curl.calls")" -gt 2 ] || fail "after both servers failed it did not try again"
+run 2026/11/21/10/00/20 && fail "a ten-minute-old answer was accepted"
+stored 2026/11/21/10/00/20 && fail "a ten-minute-old answer was uploaded"
+[ "$(grep -c . "$DIR/curl.calls")" = 2 ] || fail "it did not ask each server exactly once: $(cat "$DIR/curl.calls")"
 
 echo 'not json' > "$DIR/mot/moran.mot.gov.il"; rm "$DIR/mot/moran-t.mot.gov.il"
-run 2026/11/21/10/03 && fail "an answer that is not SIRI was accepted"
+run 2026/11/21/10/00/30 && fail "an answer that is not SIRI was accepted"
 
 snapshot 5 > "$DIR/mot/moran.mot.gov.il"; touch "$DIR/s3.down"
-run 2026/11/21/10/04 && fail "a failed upload was reported as success"
-[ -f "$DIR/spool/2026/11/21/10/04.br" ] || fail "a snapshot that did not reach S3 was not kept to retry"
+run 2026/11/21/10/00/40 && fail "a failed upload was reported as success"
+[ -f "$DIR/spool/2026/11/21/10/00/40.br" ] || fail "a snapshot that did not reach S3 was not kept to retry"
 rm "$DIR/s3.down"
-run 2026/11/21/10/05 || fail "the run after an S3 outage failed"
-stored 2026/11/21/10/04 || fail "the snapshot kept during the outage was not uploaded later"
-stored 2026/11/21/10/05 || fail "the snapshot after the outage was not uploaded"
+run 2026/11/21/10/00/50 || fail "the run after an S3 outage failed"
+stored 2026/11/21/10/00/40 || fail "the snapshot kept during the outage was not uploaded later"
+stored 2026/11/21/10/00/50 || fail "the snapshot after the outage was not uploaded"
 [ -z "$(find "$DIR/spool" -name '*.br')" ] || fail "uploaded snapshots were left in the spool"
 
 # A spool S3 never accepts must not fill ClickHouse's disk.
 mkdir -p "$DIR/spool/2026/11/18/10"; touch -d '-3 days' "$DIR/spool/2026/11/18/10/00.br"; touch "$DIR/s3.down"
-run 2026/11/21/10/06 || true
+run 2026/11/21/10/00/60 || true
 [ -e "$DIR/spool/2026/11/18" ] && fail "a three-day-old unsent snapshot was kept"
+
+# Run by a timer every 15 seconds, it names the snapshot after the 15-second slot it fell in.
+rm -rf "$DIR/s3/b" "$DIR/s3.down"; snapshot 5 > "$DIR/mot/moran.mot.gov.il"
+PATH=$DIR/bin:$PATH OPEN_BUS_MOT_KEY=secret-key SIRI_BUCKET=b SIRI_SPOOL=$DIR/spool ./scripts/siri-request.sh >/dev/null 2>&1 \
+  || fail "a run with no SNAPSHOT_ID failed"
+name=$(cd "$DIR/s3/b/snapshots" && find . -name '*.br' | head -1)
+echo "$name" | grep -qE '^\./[0-9]{4}/[0-9]{2}/[0-9]{2}/[0-9]{2}/[0-9]{2}/(00|15|30|45)\.br$' \
+  || fail "the snapshot is not named after its 15-second slot: $name"
 
 echo "siri-request: ok"
