@@ -34,3 +34,5 @@ jsonpath "$.history[0].load1_avg" exists
 jsonpath "$.history[0].load1_p95" exists
 jsonpath "$.history[0].memory_used_avg" > 0
 jsonpath "$.history[0].memory_used_p95" > 0
+jsonpath "$.history[0].load1_max" exists
+jsonpath "$.history[0].memory_used_max" > 0
