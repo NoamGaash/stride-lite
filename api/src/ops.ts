@@ -173,15 +173,17 @@ export function metricsSql(db: string): Record<string, string> {
           .map((m) => `(SELECT value FROM system.asynchronous_metrics WHERE metric = '${m}') AS ${m}`)
           .join(',\n        ')}`,
     disks: `SELECT name, free_space, total_space, unreserved_space FROM system.disks`,
-    // Memory as used rather than available, so its 95th percentile is the busy end.
-    history: `SELECT window, hours, samples, since, load1_avg, load1_p95, memory_used_avg,
-        memory_used_p95, memory_capacity
+    // Memory as used rather than available, so its 95th percentile is the busy end. The
+    // maximum is what sizing the node turns on: one peak over the limit is a failed job.
+    history: `SELECT window, hours, samples, since, load1_avg, load1_p95, load1_max,
+        memory_used_avg, memory_used_p95, memory_used_max, memory_capacity
       FROM (${[['hour', 1], ['day', 24], ['week', 168]]
       .map(([window, hours]) => `SELECT '${window}' AS window, ${hours} AS hours,
         count() AS samples, min(measured_at) AS since,
-        avg(load1) AS load1_avg, quantile(0.95)(load1) AS load1_p95,
+        avg(load1) AS load1_avg, quantile(0.95)(load1) AS load1_p95, max(load1) AS load1_max,
         avg(memory_total - memory_available) AS memory_used_avg,
         quantile(0.95)(memory_total - memory_available) AS memory_used_p95,
+        max(memory_total - memory_available) AS memory_used_max,
         max(memory_total) AS memory_capacity
       FROM ${db}.node_metrics WHERE measured_at > now() - INTERVAL ${hours} HOUR`)
       .join('\n      UNION ALL ')})\n      ORDER BY hours`,
