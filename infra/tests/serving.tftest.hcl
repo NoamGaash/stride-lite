@@ -26,8 +26,8 @@ override_data {
 
 run "serving_node" {
   assert {
-    condition     = aws_instance.app.instance_type == "t4g.large"
-    error_message = "the node is not back at t4g.large"
+    condition     = aws_instance.app.instance_type == "t4g.medium"
+    error_message = "the node is not at t4g.medium, the size the project is costed on"
   }
   assert {
     condition     = one(aws_instance.app.credit_specification).cpu_credits == "standard"

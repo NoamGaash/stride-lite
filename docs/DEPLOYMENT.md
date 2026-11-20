@@ -8,7 +8,7 @@ Five questions, answered with what was measured. Anything not measured is labell
 
 ## 1. What it costs
 
-**One VM, one disk, a CDN in front: $2.72 a day, $83 a month in us-east-1.** Under the $150
+**One VM, one disk, a CDN in front: $2.10 a day, $64 a month in us-east-1.** Under the $150
 target, and under it on on-demand rates with nothing committed.
 
 Every rate below comes from AWS's own published price list, effective **2026-11-01**, and is
@@ -26,16 +26,19 @@ script and not a paragraph.
 
 | Service | What | Per day | Per month |
 | --- | --- | --- | --- |
-| EC2 | `t4g.large`, 2 vCPU, 8 GB Graviton, 24 h | **$1.61** | $49.06 |
+| EC2 | `t4g.medium`, 2 vCPU, 4 GB Graviton, 24 h | **$0.81** | $24.53 |
 | EBS | 350 GB `gp3`, the database | $0.92 | $28.00 |
 | EBS | 20 GB `gp3`, root | $0.05 | $1.60 |
 | VPC | one public IPv4 address | $0.12 | $3.65 |
 | S3 | ingest requests, ~1,440 LIST + ~1,430 GET a day | $0.01 | $0.24 |
 | S3 | 254.57 GiB of Standard, the restorable copy of the database | $0.19 | **$5.86** |
 | CloudFront | inside the always-free 1 TB and 10 M requests | **$0** | $0 |
-| | | **$2.91** | **$88.41** |
+| | | **$2.10** | **$63.88** |
 
-A one-year no-upfront reservation on the instance takes it to **$2.30 a day, $70 a month**.
+A one-year no-upfront reservation on the instance takes it to **$1.80 a day, $55 a month**.
+
+The node ran as a `t4g.large` (8 GB, $49.06 a month) until 2026-11-20. Ten hours of
+`/ops/metrics` history then showed 1.5 GB in use at the 95th percentile, so it moved to 4 GB.
 
 **The backup line is new and it buys one thing: a fresh instance that fills itself in an hour
 instead of days, without reading a non-profit's bucket.** 7% of the bill. `-var
@@ -161,7 +164,7 @@ years it does.
 
 **On (a)'s wall clock, honestly: not measured on this hardware, and the local figure does not
 transfer.** 14 h on six throttled cores is what `docs/LOCAL-DB.md` measured for the parse; a
-`t4g.large` has two vCPUs and a 30% baseline, so a job that pins them for a day will exhaust
+`t4g.medium` has two vCPUs and a low baseline, so a job that pins them for a day will exhaust
 its CPU credits and then run at baseline. The instance type is decoupled from the volume, so
 this is the one job worth renting a `c7g.8xlarge` for — `-var instance_type=c7g.8xlarge` at
 $1.16/h, then set it back, which stops and starts the instance without touching the volume.
@@ -397,7 +400,7 @@ that never needs rescheduling. `infra/main.tf` provisions:
 
 | Terraform resource | What it is | Why |
 | --- | --- | --- |
-| `aws_instance.app` | one `t4g.large`, 20 GB root | runs ClickHouse **and** the API |
+| `aws_instance.app` | one `t4g.medium`, 20 GB root | runs ClickHouse **and** the API |
 | `aws_ebs_volume.data` + attachment | 350 GB `gp3` | the database; separate so the instance can be replaced under it |
 | `aws_cloudfront_distribution.api` | CDN, 300 s default TTL | caches the repeated query strings the frontend issues, which bounds egress |
 | `aws_security_group.api` | port 80 in, nothing else | there is no key pair, so there is nothing for port 22 to admit |
