@@ -36,7 +36,9 @@ second requester needs a stable public IPv4 address, registered with the Ministr
 maintainer can ask for one or more additional addresses.
 
 Hasadna's requester does not own that address. It sends through `hasadna-proxy1`, a squid
-server set up by hand whose public IP is the allowlisted one
+server set up by hand whose public IP is the allowlisted one. It listens only on Hasadna's
+private network (`lan-82145-hasadna`), for the cluster's `openbus`, `oknesset` and `meirim`
+namespaces, and otherwise asks for a password kept in Vault
 ([hasadna-iac `modules/hasadna/proxy.tf`](https://github.com/hasadna/hasadna-iac/blob/main/modules/hasadna/proxy.tf)).
 **So a second requester needs an address of its own.** Sending through the same proxy would
 share its single point of failure, which is the failure this page is about.
@@ -45,7 +47,8 @@ share its single point of failure, which is the failure this page is about.
 - whether the Ministry requires an Israeli address;
 - how long registering one takes. An outside developer reported on Hasadna's Slack that a
   request sent on 2026-10-29, with a reminder on 2026-11-03, had no reply by 2026-11-20.
-  Start the request before building anything.
+  The request has to name the address, so the server comes first. It is the cheap part:
+  create it with its static IP, send the request, and write the requester while waiting.
 
 ## Options
 
@@ -58,6 +61,7 @@ Prices are public list prices, as labelled. Nothing below is what Hasadna actual
 | 3 | A timer on the AWS node, kept as a spot instance for staging, using its existing Elastic IP | $0 extra (the IP: ~$3.6 while stopped) | No | **the spot instance is running** | One unit |
 | 4 | Option 3, plus an automatic failover to a tiny instance when the spot stops | ~$0.1 (a stopped tiny instance's disk) | No | almost always; ~1–2 minutes lost per switch | EventBridge, Lambda, two instances, moving the EIP |
 | 5 | **A tiny always-on server running only the requester** | Lightsail **$5** incl. static IP *([price page](https://aws.amazon.com/lightsail/pricing/), 2026-11-20)*; Hetzner from €5.49 excl. VAT, IPv4 price not stated *([page](https://www.hetzner.com/cloud/))*; Oracle Cloud Always Free *(unverified)* | No | that small server is up | One server, one unit |
+| 6 | Another party's requester, used to fill gaps | $0 | No | their requester is up | Reading their bucket |
 
 ### Notes on each
 
@@ -82,6 +86,11 @@ Prices are public list prices, as labelled. Nothing below is what Hasadna actual
      events, and could fail on exactly the day it is needed.
 5. **Tiny always-on.** No automation and no dependency on the spot instance. The staging
    instance keeps its Elastic IP for itself.
+6. **Someone else's requester.** Another project with its own Ministry account writes its
+   snapshots to a bucket it shares, and the ingest fills gaps from it. No cost and no
+   registration on this side. In exchange, this project depends on them, has no say in their
+   format or uptime, and has to check that their files are the same SIRI response before
+   mixing them in.
 
 ## Recommendation
 
