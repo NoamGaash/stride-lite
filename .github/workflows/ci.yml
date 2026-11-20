@@ -309,6 +309,12 @@ jobs:
             echo "the secret is in the bootstrap log"; exit 1
           fi
           systemctl is-active stride-deploy.timer
+          systemctl is-active siri-requester-watchdog.timer
+          /opt/siri-requester/venv/bin/open-bus-siri-requester --help
+          # No Ministry key here, so the requester is installed and enabled but skipped.
+          systemctl is-enabled siri-requester
+          sudo systemctl start siri-requester
+          test "$(systemctl show siri-requester -p ActiveState --value)" = inactive
       - name: The timer's deploy brings the node to the branch's head
         # The bootstrap recorded the checkout as deployed. On a pull request that is
         # the merge commit, but on a push it is the branch's head itself, so forget
@@ -349,6 +355,9 @@ jobs:
       - name: The timer deploys main when it moves, once, and retries a failure
         working-directory: .
         run: tests/auto-deploy.sh
+      - name: The requester watchdog restarts a silent requester and prunes old snapshots
+        working-directory: .
+        run: tests/requester-watchdog.sh
 
   differential:
     # Compares endpoints against the live production API, which is a non-profit's

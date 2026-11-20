@@ -225,8 +225,9 @@ resource "aws_security_group" "api" {
   }
 }
 
-# ClickHouse reads the public archive with NOSIGN, so the instance needs no S3
-# credentials at all. The role exists only for SSM access.
+# ClickHouse reads the public archive with NOSIGN, so the database needs no S3
+# credentials at all. The role is for SSM access, and for the SIRI requester's
+# writes (infra/requester.tf).
 resource "aws_iam_role" "instance" {
   name = "stride-lite-instance"
 
@@ -357,8 +358,8 @@ resource "aws_iam_role_policy" "backup" {
   })
 }
 
-# The instance's own permission is one action on one role, which is the whole of
-# its S3 access: the public archive it reads with NOSIGN and needs nothing for.
+# For the backup, the instance's own permission is one action on one role: the
+# public archive it reads with NOSIGN and needs nothing for.
 resource "aws_iam_role_policy" "instance_assume_backup" {
   count = var.backup_bucket_enabled ? 1 : 0
   name  = "stride-lite-assume-backup"

@@ -1,0 +1,8 @@
+[Unit]
+Description=Restart the SIRI requester when it stops writing snapshots
+
+[Service]
+Type=oneshot
+Environment=OPEN_BUS_SIRI_STORAGE_ROOTPATH=/var/lib/siri-requester
+EnvironmentFile=-/etc/stride-lite/node.env
+ExecStart=/opt/stride-lite/scripts/requester-watchdog.sh

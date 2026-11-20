@@ -20,6 +20,7 @@
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 #                    off AWS: the key the backup is signed with
 #   START_FIRST_LOAD 0 to leave the first load unstarted (default 1)
+#   OPEN_BUS_MOT_KEY the Ministry's SIRI key; without it the requester stays off
 set -euxo pipefail
 
 DEV=${DATA_DEVICE:?set DATA_DEVICE to the empty disk for ClickHouse data}
@@ -82,6 +83,7 @@ install -d -o clickhouse -g clickhouse /etc/clickhouse-server /var/log/clickhous
 [ -d "$REPO/.git" ] || git clone --branch "$BRANCH" --depth 1 https://github.com/NoamGaash/stride-lite "$REPO"
 cd "$REPO"
 (cd api && npm ci --omit=dev)
+./scripts/install-requester.sh || echo "the SIRI requester did not install; the API goes on without it"
 
 # What only this node knows, for the units in infra/node to read. Everything
 # else on the node — ClickHouse's config, the units, the cron entries — comes
@@ -92,7 +94,7 @@ set +x
 install -d /etc/stride-lite
 install -m 0600 /dev/null /etc/stride-lite/node.env
 AWS_REGION=${AWS_REGION:-us-east-1}
-for name in BRANCH AWS_REGION BACKUP_URL BACKUP_PUBLISH BACKUP_ROLE_ARN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+for name in BRANCH AWS_REGION BACKUP_URL BACKUP_PUBLISH BACKUP_ROLE_ARN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY OPEN_BUS_MOT_KEY; do
   if [ -n "${!name:-}" ]; then echo "$name=${!name}" >> /etc/stride-lite/node.env; fi
 done
 set -x

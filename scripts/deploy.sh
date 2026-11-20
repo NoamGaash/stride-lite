@@ -26,6 +26,7 @@ git fetch --depth 1 origin "$BRANCH"
 git reset --hard FETCH_HEAD
 
 (cd api && npm ci --omit=dev)
+./scripts/install-requester.sh || echo "the SIRI requester did not install; the API goes on without it"
 RESTART_CHANGED=1 ./scripts/install-node-config.sh
 
 # Everything past this point writes to the database, and scripts/first-load.sh

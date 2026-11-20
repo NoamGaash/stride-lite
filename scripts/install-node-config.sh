@@ -42,6 +42,9 @@ done
 [ "$units_changed" = 0 ] || $SYSTEMCTL daemon-reload
 $SYSTEMCTL enable clickhouse stride-api stride-first-load
 $SYSTEMCTL enable --now stride-deploy.timer
+# The watchdog starts the requester once a Ministry key is in node.env.
+$SYSTEMCTL enable siri-requester
+$SYSTEMCTL enable --now siri-requester-watchdog.timer
 
 if [ "$clickhouse_changed" = 1 ] && [ "${RESTART_CHANGED:-0}" = 1 ]; then
   $SYSTEMCTL restart clickhouse
