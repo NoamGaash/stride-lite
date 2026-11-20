@@ -101,9 +101,13 @@ variable "availability_zone" {
   default = "us-east-1a"
 }
 
+# 4 GB, not 8. Measured on the live node 2026-11-20 over ten hours: memory in use
+# averaged 1.48 GB with a 95th percentile of 1.51 GB, CPU demand 17% of two cores.
+# The one time it came near 8 GB was the first load, which is the job worth
+# renting a bigger instance for (docs/DEPLOYMENT.md §2).
 variable "instance_type" {
   type    = string
-  default = "t4g.large"
+  default = "t4g.medium"
 }
 
 # 350 and not 400, and not 300. Measured on the local database 2026-11-07:
@@ -524,9 +528,16 @@ resource "aws_acm_certificate_validation" "api" {
 # on every stop and start, which resizing it is. An Elastic IP keeps it. While
 # attached it costs what any public IPv4 address costs, which the instance's own
 # already did.
+#
+# Its address is also the one a SIRI requester here would be allowlisted under
+# (docs/REQUESTER.md), and a released Elastic IP never comes back.
 resource "aws_eip" "app" {
   instance = aws_instance.app.id
   domain   = "vpc"
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 resource "aws_cloudfront_distribution" "api" {

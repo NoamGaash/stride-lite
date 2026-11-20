@@ -198,7 +198,7 @@ loaded and counted, not extrapolated.
 | `siri_vehicle_location` (6.5 billion rows) | **1.34 TB** | **111.52 GiB** |
 | The entire database | ~692 GiB of data + ~760 GB of indexes | **163.98 GiB**, or 233.02 GiB with every projection |
 | Growth per year | +307 GB | **+36 GB** |
-| Estimated AWS bill | — | **$2.72/day, $82.55/month** |
+| Estimated AWS bill | — | **$2.10/day, $63.88/month** |
 
 Three findings behind them:
 
