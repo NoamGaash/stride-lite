@@ -24,13 +24,28 @@ real-time interface, so those minutes most likely cannot be requested again.
 
 A second requester, writing to its own bucket, would have covered them.
 
+Where the gap came from is not known yet. Airflow does not show it: the requester is not a
+DAG but a Kubernetes Deployment, `siri-requester` in the `openbus` namespace
+([hasadna-k8s](https://github.com/hasadna/hasadna-k8s/blob/master/apps/openbus/templates/siri-requester-deployment.yaml)).
+Its pod's logs and restarts, and the proxy below, are where to look.
+
 ## The constraint: a fixed source address
 
 The Ministry of Transport answers SIRI requests only from addresses it has allowlisted. A
 second requester needs a stable public IPv4 address, registered with the Ministry. The
 maintainer can ask for one or more additional addresses.
 
-*Open question:* whether the Ministry requires an Israeli address.
+Hasadna's requester does not own that address. It sends through `hasadna-proxy1`, a squid
+server set up by hand whose public IP is the allowlisted one
+([hasadna-iac `modules/hasadna/proxy.tf`](https://github.com/hasadna/hasadna-iac/blob/main/modules/hasadna/proxy.tf)).
+**So a second requester needs an address of its own.** Sending through the same proxy would
+share its single point of failure, which is the failure this page is about.
+
+*Open questions:*
+- whether the Ministry requires an Israeli address;
+- how long registering one takes. An outside developer reported on Hasadna's Slack that a
+  request sent on 2026-10-29, with a reminder on 2026-11-03, had no reply by 2026-11-20.
+  Start the request before building anything.
 
 ## Options
 

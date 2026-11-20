@@ -24,12 +24,22 @@
 
 requester שני, שכותב לבאקט משלו, היה מכסה אותן.
 
+עדיין לא ידוע מאיפה הגיע הפער. Airflow לא מראה אותו, כי ה-requester הוא לא DAG.
+הוא Deployment בקוברנטיס, `siri-requester` ב-namespace‏ `openbus` ([hasadna-k8s](https://github.com/hasadna/hasadna-k8s/blob/master/apps/openbus/templates/siri-requester-deployment.yaml)).
+צריך לחפש בלוגים וב-restarts של ה-pod שלו, ובשרת ה-proxy שמתואר למטה.
+
 ## האילוץ: כתובת מקור קבועה
 
 משרד התחבורה עונה לבקשות SIRI רק מכתובות שאישר מראש.
 לכן requester שני צריך כתובת IPv4 ציבורית קבועה, רשומה במשרד. המתחזק יכול לבקש כתובת נוספת אחת או יותר.
 
-*שאלה פתוחה:* האם המשרד דורש כתובת ישראלית.
+ה-requester של הסדנה לא מחזיק את הכתובת הזו בעצמו.
+הוא שולח דרך `hasadna-proxy1`, שרת squid שהוקם ידנית, וכתובת ה-IP הציבורית שלו היא זו שאושרה ([hasadna-iac‏ `modules/hasadna/proxy.tf`](https://github.com/hasadna/hasadna-iac/blob/main/modules/hasadna/proxy.tf)).
+**לכן requester שני צריך כתובת משלו.** שליחה דרך אותו proxy היא נקודת כשל משותפת, וזה בדיוק הכשל שהמסמך הזה עוסק בו.
+
+*שאלות פתוחות:*
+- האם המשרד דורש כתובת ישראלית;
+- כמה זמן לוקח לרשום כתובת. מפתח מחוץ לפרויקט סיפר ב-Slack של הסדנה שבקשה ששלח ב-29.10.2026, עם תזכורת ב-3.11, עוד לא נענתה ב-20.11. כדאי לשלוח את הבקשה לפני שבונים משהו.
 
 ## האפשרויות
 
