@@ -123,10 +123,10 @@ jobs:
         env:
           CH_CLIENT: ./clickhouse client
         run: ./scripts/apply-schema.sh
-      - name: Expect the 16 tables, siri_ride_duration, siri_ride_gtfs, backfill_progress, the landing table, the aggregation table and its refresh, and the migration record
+      - name: Expect the 16 tables, siri_ride_duration, siri_ride_gtfs, backfill_progress, the landing table, the aggregation table and its refresh, the migration record, and node_metrics and its refresh
         run: |
           n=$(./clickhouse client --query "SELECT count() FROM system.tables WHERE database='stride'")
-          test "$n" = 24 || { echo "got $n tables, want 24"; exit 1; }
+          test "$n" = 26 || { echo "got $n tables, want 26"; exit 1; }
 
       - name: Expect apply-schema to be idempotent
         run: ./scripts/apply-schema.sh
@@ -153,7 +153,7 @@ jobs:
       - name: Expect the whole chain to be registered and healthy
         run: |
           n=$(./clickhouse client --query "SELECT count() FROM system.view_refreshes WHERE database='stride'")
-          test "$n" = 16 || { echo "got $n refreshable views, want 16"; exit 1; }
+          test "$n" = 17 || { echo "got $n refreshable views, want 17"; exit 1; }
           bad=$(./clickhouse client --query "SELECT count() FROM system.view_refreshes WHERE database='stride' AND exception != ''")
           test "$bad" = 0 || {
             ./clickhouse client --query "SELECT view, exception FROM system.view_refreshes WHERE exception != '' FORMAT Vertical"
