@@ -14,7 +14,7 @@ mock_provider "aws" {
     defaults = { public_dns = "ec2-2-2-2-2.compute-1.amazonaws.com" }
   }
   mock_resource "aws_s3_bucket" {
-    defaults = { arn = "arn:aws:s3:::openbus-siri-snapshots" }
+    defaults = { arn = "arn:aws:s3:::openbus-mot-archive" }
   }
 }
 
@@ -48,7 +48,7 @@ run "recovery" {
     error_message = "reboot and recover evaluate over the same period, which AWS says makes them race"
   }
   assert {
-    condition     = jsondecode(aws_iam_role_policy.instance_siri_snapshots.policy).Statement[0].Action == "s3:PutObject"
+    condition     = jsondecode(aws_iam_role_policy.instance_mot_archive_siri.policy).Statement[0].Action == "s3:PutObject"
     error_message = "the instance may do more to the snapshots bucket than add to it"
   }
 }

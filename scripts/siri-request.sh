@@ -2,7 +2,7 @@
 # One SIRI snapshot from the Ministry of Transport: the AllActiveTripsFilter
 # answer that Hasadna's requester (github.com/hasadna/open-bus-siri-requester)
 # also asks for, brotli-compressed, at
-#   s3://$SIRI_BUCKET/snapshots/YYYY/MM/DD/HH/MM/SS.br
+#   s3://$SIRI_BUCKET/siri/YYYY/MM/DD/HH/MM/SS.br
 # Run every 15 seconds by infra/node/systemd/siri-requester.timer. The Ministry
 # builds a new answer every 15 seconds and allows a request every 15 seconds
 # (ICD SM 2.8, sections 7.15 and 7.18); Hasadna asks once a minute, so its
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 : "${OPEN_BUS_MOT_KEY:?set the Ministry SIRI key}"
-BUCKET=${SIRI_BUCKET:-openbus-siri-snapshots}
+BUCKET=${SIRI_BUCKET:-openbus-mot-archive}
 SPOOL=${SIRI_SPOOL:-/var/lib/siri-requester}
 now=$(date -u +%s)
 ID=${SNAPSHOT_ID:-$(date -u -d "@$((now / 15 * 15))" +%Y/%m/%d/%H/%M/%S)}
@@ -61,7 +61,7 @@ fetch() {
 upload() {
   local failed=0 f
   while IFS= read -r f; do
-    if aws s3 cp "$f" "s3://$BUCKET/snapshots/${f#"$SPOOL"/}" --only-show-errors; then
+    if aws s3 cp "$f" "s3://$BUCKET/siri/${f#"$SPOOL"/}" --only-show-errors; then
       rm -f "$f"
     else
       failed=1

@@ -38,12 +38,12 @@ run() {
   PATH=$DIR/bin:$PATH OPEN_BUS_MOT_KEY=secret-key SIRI_BUCKET=b SIRI_SPOOL=$DIR/spool \
     SNAPSHOT_ID=$1 ./scripts/siri-request.sh >/dev/null 2>&1
 }
-stored() { [ -f "$DIR/s3/b/snapshots/$1.br" ]; }
+stored() { [ -f "$DIR/s3/b/siri/$1.br" ]; }
 
 snapshot 5 > "$DIR/mot/moran.mot.gov.il"
 run 2026/11/21/10/00/00 || fail "a good answer from the main server failed"
 stored 2026/11/21/10/00/00 || fail "a good answer was not uploaded under its moment"
-grep -q '"MonitoredStopVisit"' "$DIR/s3/b/snapshots/2026/11/21/10/00/00.br" || fail "the stored snapshot is not the answer"
+grep -q '"MonitoredStopVisit"' "$DIR/s3/b/siri/2026/11/21/10/00/00.br" || fail "the stored snapshot is not the answer"
 [ -z "$(ls -A "$DIR/spool")" ] || fail "a snapshot that reached S3 was kept locally"
 
 rm "$DIR/mot/moran.mot.gov.il"; snapshot 5 > "$DIR/mot/moran-t.mot.gov.il"
@@ -77,7 +77,7 @@ run 2026/11/21/10/00/60 || true
 rm -rf "$DIR/s3/b" "$DIR/s3.down"; snapshot 5 > "$DIR/mot/moran.mot.gov.il"
 PATH=$DIR/bin:$PATH OPEN_BUS_MOT_KEY=secret-key SIRI_BUCKET=b SIRI_SPOOL=$DIR/spool ./scripts/siri-request.sh >/dev/null 2>&1 \
   || fail "a run with no SNAPSHOT_ID failed"
-name=$(cd "$DIR/s3/b/snapshots" && find . -name '*.br' | head -1)
+name=$(cd "$DIR/s3/b/siri" && find . -name '*.br' | head -1)
 echo "$name" | grep -qE '^\./[0-9]{4}/[0-9]{2}/[0-9]{2}/[0-9]{2}/[0-9]{2}/(00|15|30|45)\.br$' \
   || fail "the snapshot is not named after its 15-second slot: $name"
 
