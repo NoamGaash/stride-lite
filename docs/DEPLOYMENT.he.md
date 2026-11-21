@@ -487,8 +487,10 @@ CloudFront, וזה cache שני, סיום TLS שני ומקום שני לדבג.
 שני פרטים מכריעים אם ה-trust policy מתאים, ושניהם נכשלים באותה צורה שקטה — פשוט אין הרשאה
 ל-`AssumeRoleWithWebIdentity`, בלי לומר איזה claim לא הסכים:
 
-- **ה-job מצהיר על environment, ולכן ה-`sub` מסתיים ב-`:environment:aws`** ולא
-  ב-`:ref:refs/heads/main`. trust policy שנכתב סביב הענף לא יתאים אף פעם.
+- **ה-job שמקבל את ה-role לא מצהיר על environment, ולכן ה-`sub` מסתיים
+  ב-`:ref:refs/heads/main`.** ה-environment נמצא על ה-job `approve` שלפניו. אם מחזירים אותו,
+  ה-`sub` מסתיים ב-`:environment:aws`; ה-trust policy מתאים לשניהם, כי הוא נועץ את הריפו
+  ולא את הסיומת.
 - **ריפו שנוצר אחרי 15/07/2026 מקבל את פורמט ה-`sub` ה-immutable**,
   `repo:OWNER@OWNER-ID/REPO@REPO-ID:...`. הריפו הזה נוצר ב-03/11/2026, אז זו הצורה שהוא שולח.
   ה-trust policy מקבל את שני האיומים של אותו ריפו ונועץ אותו לפי מזהה מספרי, שאף שינוי שם
@@ -538,6 +540,10 @@ echo "$BUCKET"   # זה ה-variable בשם TF_STATE_BUCKET
 
 ה-workflow מצביע על GitHub environment בשם `aws`. הגדרת reviewer נדרש עליו היא מה שהופך
 "כל push נפרס" ל-"כל push מבקש אישור", וזה checkbox אחד.
+
+רק ה-commit החדש ביותר מבקש. האישור יושב ב-job נפרד, `approve`, שה-concurrency שלו מבטל
+ריצה ישנה שעדיין ממתינה, כך ש-commit שלא אושר לא תופס את התור. ה-job `deploy` שאחריו לא
+מבוטל אף פעם אחרי שהתחיל, ו-commit חדש יותר שאושר מחליף אחד שרק ממתין מאחוריו.
 
 ההרשאות מוגבלות במקומות שבהם להגבלה יש משמעות: גישה ל-state היא דלי אחד ו-prefix אחד, IAM
 הוא `stride-lite-*` בלבד, EC2 מותנה באזור, ו-`ssm:SendCommand` מותנה ב-`Project=stride-lite`
