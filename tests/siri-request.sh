@@ -74,7 +74,7 @@ run 2026/11/21/10/00/60 || true
 [ -e "$DIR/spool/2026/11/18" ] && fail "a three-day-old unsent snapshot was kept"
 
 # Run by a timer every 15 seconds, it names the snapshot after the 15-second slot it fell in.
-rm -rf "$DIR/s3/b" "$DIR/s3.down"; snapshot 5 > "$DIR/mot/moran.mot.gov.il"
+rm -rf "$DIR/s3/b" "$DIR/s3.down" "$DIR/spool"; mkdir "$DIR/spool"; snapshot 5 > "$DIR/mot/moran.mot.gov.il"
 PATH=$DIR/bin:$PATH OPEN_BUS_MOT_KEY=secret-key SIRI_BUCKET=b SIRI_SPOOL=$DIR/spool ./scripts/siri-request.sh >/dev/null 2>&1 \
   || fail "a run with no SNAPSHOT_ID failed"
 name=$(cd "$DIR/s3/b/siri" && find . -name '*.br' | head -1)
