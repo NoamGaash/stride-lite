@@ -20,6 +20,7 @@
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 #                    off AWS: the key the backup is signed with
 #   START_FIRST_LOAD 0 to leave the first load unstarted (default 1)
+#   OPEN_BUS_MOT_KEY the Ministry's SIRI key; without it the requester stays off
 set -euxo pipefail
 
 DEV=${DATA_DEVICE:?set DATA_DEVICE to the empty disk for ClickHouse data}
@@ -38,14 +39,14 @@ mount -a
 
 # ---- packages --------------------------------------------------------------
 if command -v dnf >/dev/null; then
-  dnf install -y git tar zstd unzip cronie
+  dnf install -y git tar zstd unzip cronie brotli
   systemctl enable --now crond
   curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
   dnf install -y nodejs
 else
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
-  apt-get install -y git tar zstd unzip cron curl ca-certificates
+  apt-get install -y git tar zstd unzip cron curl ca-certificates brotli
   systemctl enable --now cron
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   apt-get install -y nodejs
@@ -92,7 +93,7 @@ set +x
 install -d /etc/stride-lite
 install -m 0600 /dev/null /etc/stride-lite/node.env
 AWS_REGION=${AWS_REGION:-us-east-1}
-for name in BRANCH AWS_REGION BACKUP_URL BACKUP_PUBLISH BACKUP_ROLE_ARN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+for name in BRANCH AWS_REGION BACKUP_URL BACKUP_PUBLISH BACKUP_ROLE_ARN AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY OPEN_BUS_MOT_KEY; do
   if [ -n "${!name:-}" ]; then echo "$name=${!name}" >> /etc/stride-lite/node.env; fi
 done
 set -x

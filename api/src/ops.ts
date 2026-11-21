@@ -31,6 +31,7 @@ export const LOG_SOURCES: Record<string, Source> = {
   deploy: { unit: 'stride-deploy' },
   clickhouse: { file: '/var/log/clickhouse-server/clickhouse.log' },
   api: { unit: 'stride-api' },
+  requester: { unit: 'siri-requester' },
 }
 
 export const DEFAULT_LINES = 200

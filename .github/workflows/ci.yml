@@ -309,6 +309,10 @@ jobs:
             echo "the secret is in the bootstrap log"; exit 1
           fi
           systemctl is-active stride-deploy.timer
+          systemctl is-active siri-requester.timer
+          # No Ministry key here, so a run is skipped rather than failed.
+          sudo systemctl start siri-requester
+          if systemctl is-failed --quiet siri-requester; then echo "a run with no key failed instead of being skipped"; exit 1; fi
       - name: The timer's deploy brings the node to the branch's head
         # The bootstrap recorded the checkout as deployed. On a pull request that is
         # the merge commit, but on a push it is the branch's head itself, so forget
@@ -349,6 +353,9 @@ jobs:
       - name: The timer deploys main when it moves, once, and retries a failure
         working-directory: .
         run: tests/auto-deploy.sh
+      - name: The SIRI requester stores a valid snapshot, falls back, and retries uploads
+        working-directory: .
+        run: tests/siri-request.sh
 
   differential:
     # Compares endpoints against the live production API, which is a non-profit's
