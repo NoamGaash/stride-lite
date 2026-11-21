@@ -12,13 +12,6 @@ on:
     branches: [main]
   workflow_dispatch:
 
-# One deploy at a time, and never cancelled half way: an interrupted apply leaves
-# state and reality disagreeing, and an interrupted deploy leaves a node between
-# two commits.
-concurrency:
-  group: deploy
-  cancel-in-progress: false
-
 permissions:
   contents: read
   # The OIDC token this job trades for AWS credentials. Without it the exchange
@@ -26,7 +19,12 @@ permissions:
   id-token: write
 
 jobs:
-  deploy:
+  # The approval is its own job so that only the newest commit waits for it. A
+  # run waiting for review holds its concurrency group; with the review inside
+  # the deploy job, that kept an old commit at the head of the queue and made a
+  # newer one wait behind it. Here a newer push cancels the older wait, which is
+  # safe because nothing has run yet.
+  approve:
     # Until an account is configured there is nothing to deploy to, and a red
     # main would be reporting the absence of a bucket as a broken build. Setting
     # both variables is what turns this on; gating on both means a half-finished
@@ -35,6 +33,22 @@ jobs:
     runs-on: ubuntu-latest
     # Set this environment up with a required reviewer to gate what reaches AWS.
     environment: aws
+    concurrency:
+      group: deploy-approval
+      cancel-in-progress: true
+    steps:
+      - run: echo "approved ${{ github.sha }}"
+
+  deploy:
+    needs: approve
+    runs-on: ubuntu-latest
+    # One deploy at a time, and never cancelled half way: an interrupted apply
+    # leaves state and reality disagreeing, and an interrupted deploy leaves a
+    # node between two commits. A newer approved commit still replaces one that
+    # is only pending here, so the queue never holds more than the latest.
+    concurrency:
+      group: deploy
+      cancel-in-progress: false
     env:
       # One source for the region, with the same default main.tf carries, so
       # leaving the variable unset gets the documented region rather than an

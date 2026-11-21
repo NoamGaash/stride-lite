@@ -52,6 +52,7 @@ results as production.
 | **Shrink the instance before touching storage**, and decide each step on measured peaks (2026-11-20) | HDD or S3 tiers as the next saving while the instance is still oversized — [#67](https://github.com/NoamGaash/stride-lite/issues/67) |
 | **The experimental API is the frontend's default**, to put real load on it, measured in Google Analytics (2026-11-17) | Keeping it opt-in until it is "ready" |
 | **Lock files are committed**, the dev container's included (2026-11-21) | Floating feature and dependency tags |
+| **Only the newest commit waits for deploy approval** (2026-11-21) | A run waiting for review holding the queue, so the next approval deploys an older commit |
 | **Deletion is not irreversible** where the output is reproducible with compute | Treating 208 GB of intermediate files as precious |
 | What the project pays today is **private**; estimates from public rates are fine | Any comparison quoting the real invoice |
 | **Where production has a bug, fixing it justifies departing from byte-for-byte** | Inheriting a defect to make a comparison pass — see finding 13 in [docs/FINDINGS.md](docs/FINDINGS.md) |

@@ -521,8 +521,10 @@ Two details decide whether the trust policy matches, and both fail the same sile
 `AssumeRoleWithWebIdentity` is simply not authorized, with nothing said about which claim
 disagreed:
 
-- **The job names an environment, so `sub` ends in `:environment:aws`**, not
-  `:ref:refs/heads/main`. A trust policy written around the branch never matches.
+- **The job that assumes the role names no environment, so `sub` ends in
+  `:ref:refs/heads/main`.** The environment is on the `approve` job before it. Move it back
+  and `sub` ends in `:environment:aws` instead; the trust policy matches either, because it
+  pins the repository and not the suffix.
 - **A repository created after 2026-07-15 gets the immutable `sub` format**,
   `repo:OWNER@OWNER-ID/REPO@REPO-ID:...`. This one was created 2026-11-03, so that is the form
   it sends. The trust policy accepts both spellings of the same repository and pins it by
@@ -575,6 +577,11 @@ apply breaks.
 
 The workflow names a GitHub environment, `aws`. Putting a required reviewer on it is what
 turns "every push deploys" into "every push asks first", and it is one checkbox.
+
+Only the newest commit asks. The review sits in its own `approve` job whose concurrency
+cancels an older run still waiting, so an unreviewed commit never holds the queue. The
+`deploy` job after it is never cancelled once it starts, and a newer approved commit
+replaces one that is only pending behind it.
 
 The policy is scoped where scoping means something: state access is the one bucket and one
 prefix, IAM is `stride-lite-*` only, EC2 is conditioned on the region, and `ssm:SendCommand`
