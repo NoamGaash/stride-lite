@@ -46,13 +46,18 @@ results as production.
 | **Do not load the machine.** It is a volunteer's workstation and their livelihood runs on it | Any default that assumes a dedicated server |
 | **Do not over-simplify if it costs performance.** "Simple" is not a licence to be slow | Dropping indexes, projections or denormalisation to shorten the code |
 | **All of the history on the machine.** Not a recent window | Tiered or partial storage as the default, and with it most of the storage saving |
-| **Availability is not a requirement.** Days of downtime are acceptable because the requesters keep writing to S3 and everything else is derived | Backups, snapshots, failover and health alarms — see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) |
+| **90% availability is enough, and less at night; losing data at the source is not.** Downtime of the API is fine because everything it serves is derived, but a SIRI snapshot nobody stored cannot be asked for again (2026-11-20) | Failover and standby nodes for the API. Not a second requester, nor alarms that reboot a hung node — see [docs/REQUESTER.md](docs/REQUESTER.md) |
+| **A second SIRI requester of our own, every 15 seconds, as simple as a `curl`** (2026-11-20, after Hasadna's requester lost 18 hours on 18–19 November) | Asking once a minute as Hasadna does, and running Hasadna's own Python daemon pinned to 2021 dependencies — [#63](https://github.com/NoamGaash/stride-lite/pull/63) |
+| **Keep the Ministry's GTFS in both its current and its new 10-day format** (2026-11-20) | Archiving only the format the ingest reads today — [#66](https://github.com/NoamGaash/stride-lite/pull/66) |
+| **Shrink the instance before touching storage**, and decide each step on measured peaks (2026-11-20) | HDD or S3 tiers as the next saving while the instance is still oversized — [#67](https://github.com/NoamGaash/stride-lite/issues/67) |
+| **The experimental API is the frontend's default**, to put real load on it, measured in Google Analytics (2026-11-17) | Keeping it opt-in until it is "ready" |
+| **Lock files are committed**, the dev container's included (2026-11-21) | Floating feature and dependency tags |
 | **Deletion is not irreversible** where the output is reproducible with compute | Treating 208 GB of intermediate files as precious |
 | What the project pays today is **private**; estimates from public rates are fine | Any comparison quoting the real invoice |
 | **Where production has a bug, fixing it justifies departing from byte-for-byte** | Inheriting a defect to make a comparison pass — see finding 13 in [docs/FINDINGS.md](docs/FINDINGS.md) |
 | **Install whatever is needed to run things.** The session is in a container | Verifying by reading source what could have been executed |
 | **A test for a fix must be shown failing without the fix** | A test committed on the strength of passing once |
-| **Open by default, in the Workshop's spirit.** Publish anything that does not expose a third party; the owner's own email and the S3 GET bill are his to spend | Redacting the budget address, and the argument that a public bucket is unsafe because of its cost |
+| **Open by default, in the Workshop's spirit.** Publish anything that does not expose a third party; the owner's own email, the S3 GET bill and his own AWS bill are his to spend (the bill on the status page: [#64](https://github.com/NoamGaash/stride-lite/issues/64)) | Redacting the budget address, and the argument that a public bucket is unsafe because of its cost |
 | **Cheapest wins, some performance loss is acceptable** | eu-west-1 for same-region reads, and m7g over a burstable instance |
 | **Data quality in the ministry's feed is a public finding, not an embarrassment to hide** | Quietly working around the 2038 timestamps instead of writing them up — see finding 14 |
 | A **public repository**, no secrets, Hebrew and English documentation | — |
@@ -73,7 +78,10 @@ None of the following was requested. Each is a judgement call, and each could be
 | **The stale dump's window is the test boundary** | Every differential case must sit inside it or fail for a reason that is not a bug | Fresh data — which continuous ingest now provides, so the newer cases compare against today |
 | **Sequential surrogate ids**, taken from the dump and continued with `max(id) + row_number()` | It is what the dump holds, so historical responses compare byte for byte | Measured 2026-11-05: identity derived as a hash of the natural key answers the same query ~100x faster and would delete the 52% of the database that exists only to hold these keys. The id constraint permits a wider type, so nothing blocks it but the work — see [db-benchmark](https://github.com/NoamGaash/open-bus-map-search/tree/main/db-benchmark) |
 | **Precomputation only where a query cannot do the work** | `gtfs_rides_agg_by_hour` as a plain view exceeds a 4 GiB ceiling, and stored it costs 181 MiB — 0.07% of the database. The identity tables cost 52% and make queries slower | — |
-| **`t4g.large` + 350 GB gp3 in us-east-1** for the estimate | Cheapest that still holds 8 GiB, which is a floor and not a preference: an unfiltered `/siri_rides/list` was measured failing at a 4 GiB ceiling, and production answers that call. Burstable is free here at a duty cycle of a couple of percent | A 24-hour steady-state measurement, which has not been run |
+| **`t4g.medium` + 350 GB gp3 in us-east-1** (was `t4g.large` until 2026-11-20) | Ten hours of `/ops/metrics` history on the `t4g.large` showed 1.5 GB in use at p95 and 17% CPU demand on average; on the `t4g.medium` ClickHouse peaked at 2.65 GB in its first nine hours, with no `MEMORY_LIMIT_EXCEEDED` and 1.6 s of memory stall since boot. A query that would need more than the API's 1.5 GiB cap answers "too broad" on any size. The same peak rules out a `t4g.small` (2 GB) | A week of maxima ([#65](https://github.com/NoamGaash/stride-lite/pull/65)) showing the daily GTFS load or a refresh failing |
+| **The second requester is a `curl` on a 15-second systemd timer**, not a daemon | A oneshot run killed at 14 s cannot hang, so no watchdog is needed; the key reaches `curl` on stdin, never on a command line; an answer is kept only if its `ResponseTimestamp` is under two minutes old; TLS is verified, where Hasadna's requester turns it off | The Ministry's certificate turning out invalid, which its first real run will show |
+| **One public bucket for the Ministry's feeds, `openbus-mot-archive`**, with SIRI at `siri/YYYY/MM/DD/HH/MM/SS.br` and GTFS at `gtfs/YYYY/MM/DD/` | Hasadna's per-minute layout has no room for seconds; GTFS is dated by the Ministry's own `Last-Modified` so a day is fetched once | Joining Hasadna's archive instead, if the AWS Open Data application leads there ([#68](https://github.com/NoamGaash/stride-lite/issues/68)) |
+| **Alarms that reboot or recover the node, rather than a standby that takes over its address** | Moving the Elastic IP to a standby needs a Lambda, two instances and states that cannot be tested on demand; a reboot keeps the same instance, address and volume, and the requester inside is guarded by `OOMScoreAdjust=-1000` and `CPUWeight=1000` | A host failure that recover does not fix |
 | **A fresh instance loads the whole history by itself**, as a `oneshot` unit rather than a command somebody remembers to run | A deploy that leaves an empty database is a deploy that does not work, and "run this afterwards" is a step that gets skipped. Five resumable stages, state on the data volume: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) §"What the first deploy leaves you with" | — |
 | **A restorable copy of the database in our own S3, at $5.86 a month**, preferred over rebuilding from public data | Reading `s3://openbus-stride-public` is billed to Hasadna, so "download once, ever" has to be a property of the design and not a habit. First instance rebuilds and publishes; every later one restores, in 35 minutes and for nothing | A cheaper storage class, or a project that would rather spend days of compute than $70 a year |
 | **us-east-1 stays, re-priced against the bulk load** | eu-west-1 would spend $120.72 a year of ours to save $3.75 of Hasadna's once and $1.32 a year after. Measured both ways from AWS's own price list on 2026-11-07 | A measurement of latency from Israel, which has never been taken |
@@ -115,6 +123,20 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
   `COPY` block for, which is every table this project added; and `MATERIALIZE PROJECTION`
   rewrites every part even when the projection is already complete, so every deploy rebuilt
   74 GiB of projections.
+
+- Found where the 18-hour gap of 18–19 November 2026 came from, and where it did not: the
+  Ministry's files are missing from Hasadna's archive itself (1,214 and 547 of ~1,430), and
+  production is empty for the same hours, so neither ingest lost them. The Ministry's own ICD
+  (SM 2.8, §7.15 and §7.18) builds a new answer every 15 seconds and allows a request that
+  often, which is why the second requester asks four times a minute.
+- Resized the node from `t4g.large` to `t4g.medium` on measured memory, and added a week of
+  per-minute load and memory history to `/ops/metrics`, as average, p95 and maximum.
+- Traced 141,147 `NOT_IMPLEMENTED` errors in `system.errors` to ClickHouse's speculative set
+  build for a nested `IN`, which it catches and falls back from at the same speed; reproduced
+  on 26.10 with and without nesting. Harmless, and no performance to gain.
+- Measured the inputs of an AWS Open Data application on 2026-11-21: Hasadna's SIRI archive
+  is 289 GB in 2.79 million files from April 2021, its GTFS archive 272 GB in 6,820 files from
+  January 2022.
 
 **Not done:**
 
