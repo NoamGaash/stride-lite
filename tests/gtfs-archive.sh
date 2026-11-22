@@ -48,14 +48,17 @@ run() {
   PATH=$DIR/bin:$PATH GTFS_WORKDIR=$DIR/work ./scripts/gtfs-archive.sh >/dev/null 2>&1
 }
 archived() { [ -f "$DIR/s3/gtfs/$1/$2" ]; }
+# Where a file published at $2 is expected: Hasadna's layout for the current
+# format, the day and time for the 10-day one.
+at() { if [ "$1" = israel-public-transportation.zip ]; then date -u -d "$2" +%Y/%m/%d; else date -u -d "$2" +%Y/%m/%d/%H%M%S; fi; }
 downloads() { grep -c '^0 https://gtfs.mot.gov.il' "$DIR/curl.calls" || true; }
 
 for f in "${FILES[@]}"; do publish "$f" '2026-11-20 01:47:53 UTC'; done
 run || fail "archiving three published files failed"
 for f in "${FILES[@]}"; do
-  archived 2026/11/20 "$f" || fail "$f was not archived under the day the Ministry published it"
+  archived "$(at "$f" '2026-11-20 01:47:53 UTC')" "$f" || fail "$f was not archived under the time the Ministry published it"
 done
-grep -q "Gtfs_10_days.zip at" "$DIR/s3/gtfs/2026/11/20/Gtfs_10_days.zip" || fail "the archived file is not the Ministry's"
+grep -q "Gtfs_10_days.zip at" "$DIR/s3/gtfs/2026/11/20/014753/Gtfs_10_days.zip" || fail "the archived file is not the Ministry's"
 [ -z "$(ls -A "$DIR/work")" ] || fail "a downloaded file was left on the node's disk"
 
 # Every few hours it looks again; a day already archived is not downloaded twice.
@@ -68,15 +71,21 @@ run || fail "archiving a new day failed"
 archived 2026/11/21 israel-public-transportation.zip || fail "the new day was not archived"
 [ "$(downloads)" = 1 ] || fail "expected one download, got $(downloads)"
 
+# A second version of the 10-day feed on the same day is kept beside the first.
+publish Gtfs_10_days.zip '2026-11-20 13:05:00 UTC'
+run || fail "archiving a same-day update failed"
+archived 2026/11/20/130500 Gtfs_10_days.zip || fail "a second version on the same day was skipped"
+archived 2026/11/20/014753 Gtfs_10_days.zip || fail "the first version of the day was lost"
+
 # One feed missing must not cost the others: each format is a fallback for the rest.
 rm "$DIR/mot/Gtfs_10_days.zip"; publish RouteNetworksByDate_10_Days.zip '2026-11-22 01:47:53 UTC'
 run && fail "a feed the Ministry stopped serving went unreported"
-archived 2026/11/22 RouteNetworksByDate_10_Days.zip || fail "one missing feed stopped the others from being archived"
+archived 2026/11/22/014753 RouteNetworksByDate_10_Days.zip || fail "one missing feed stopped the others from being archived"
 
 publish Gtfs_10_days.zip '2026-11-23 01:47:53 UTC'; touch "$DIR/s3.down"
 run && fail "a failed upload was reported as success"
 rm "$DIR/s3.down"
 run || fail "the run after an S3 outage failed"
-archived 2026/11/23 Gtfs_10_days.zip || fail "a day missed during an S3 outage was not archived later"
+archived 2026/11/23/014753 Gtfs_10_days.zip || fail "a day missed during an S3 outage was not archived later"
 
 echo "gtfs-archive: ok"

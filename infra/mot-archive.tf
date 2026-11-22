@@ -4,8 +4,9 @@
 #                                infra/node/systemd/siri-requester.service.
 #                                Hasadna's per-minute layout has no room for
 #                                the seconds.
-#   gtfs/YYYY/MM/DD/<file>       the Ministry's GTFS files, both formats, by the
-#                                day it published them; scripts/gtfs-archive.sh.
+#   gtfs/YYYY/MM/DD/<file>       the Ministry's current GTFS, one a day, in
+#                                Hasadna's layout; scripts/gtfs-archive.sh.
+#   gtfs/YYYY/MM/DD/HHMMSS/<file> the 10-day format, every version.
 # docs/REQUESTER.md is why this node asks the Ministry itself at all.
 resource "aws_s3_bucket" "mot_archive" {
   bucket = "openbus-mot-archive"
