@@ -1,0 +1,9 @@
+[Unit]
+Description=Look for new GTFS files from the Ministry every six hours
+
+[Timer]
+OnCalendar=*-*-* 00/6:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
