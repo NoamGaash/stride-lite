@@ -1,7 +1,11 @@
 <clickhouse>
     <profiles><default>
-        <max_memory_usage>6000000000</max_memory_usage>
-        <max_bytes_before_external_group_by>3000000000</max_bytes_before_external_group_by>
+        <!-- Under the server's 1.5 GiB (config.xml), and an aggregation or a
+             sort goes to disk well before it, so the ingest is slower rather
+             than failed. The API sets its own cap per query (api/src/ch.ts). -->
+        <max_memory_usage>1288490188</max_memory_usage>
+        <max_bytes_before_external_group_by>402653184</max_bytes_before_external_group_by>
+        <max_bytes_before_external_sort>402653184</max_bytes_before_external_sort>
     </default></profiles>
     <users><default>
         <password></password>
