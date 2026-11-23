@@ -7,6 +7,11 @@
 #   gtfs/YYYY/MM/DD/<file>       the Ministry's current GTFS, one a day, in
 #                                Hasadna's layout; scripts/gtfs-archive.sh.
 #   gtfs/YYYY/MM/DD/HHMMSS/<file> the 10-day format, every version.
+#   naim/gtfs/YYYY/MM/DD/HHMMSS/gtfs.zip  Tel Aviv's weekend lines, "Naim
+#                                BaSofash", from the city's portal (#74).
+#   naim/gtfs-rt/YYYY/MM/DD/HH/MM/SS.pb  their vehicle positions every 10
+#                                seconds while they run; scripts/naim-rt-request.sh.
+# Not the Ministry's, but the same kind of public feed, so the same bucket.
 # docs/REQUESTER.md is why this node asks the Ministry itself at all.
 resource "aws_s3_bucket" "mot_archive" {
   bucket = "openbus-mot-archive"
@@ -73,6 +78,22 @@ resource "aws_iam_role_policy" "instance_mot_archive_gtfs" {
       Effect   = "Allow"
       Action   = ["s3:PutObject", "s3:AbortMultipartUpload"]
       Resource = "${aws_s3_bucket.mot_archive.arn}/gtfs/*"
+    }]
+  })
+}
+
+# Tel Aviv's weekend lines: their GTFS and their GTFS-RT snapshots. Adding
+# only, as above.
+resource "aws_iam_role_policy" "instance_mot_archive_naim" {
+  name = "stride-lite-mot-archive-naim"
+  role = aws_iam_role.instance.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = "s3:PutObject"
+      Resource = "${aws_s3_bucket.mot_archive.arn}/naim/*"
     }]
   })
 }
