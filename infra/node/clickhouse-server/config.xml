@@ -8,4 +8,11 @@
     <logger><level>warning</level><log>/var/log/clickhouse-server/clickhouse.log</log></logger>
     <users_config>users.xml</users_config>
     <default_profile>default</default_profile>
+    <!-- A trial of a t4g.small (2 GiB) on the t4g.medium (4 GiB), 2026-11-23:
+         ClickHouse keeps to what it would have there, and a query past it
+         fails with MEMORY_LIMIT_EXCEEDED instead of the kernel killing the
+         server. Without it ClickHouse takes up to 90% of RAM. -->
+    <max_server_memory_usage>1610612736</max_server_memory_usage>
+    <!-- The mark cache counts against the limit above; its default is 5 GiB. -->
+    <mark_cache_size>268435456</mark_cache_size>
 </clickhouse>

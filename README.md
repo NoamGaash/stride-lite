@@ -53,6 +53,7 @@ results as production.
 | **The experimental API is the frontend's default**, to put real load on it, measured in Google Analytics (2026-11-17) | Keeping it opt-in until it is "ready" |
 | **Lock files are committed**, the dev container's included (2026-11-21) | Floating feature and dependency tags |
 | **Only the newest commit waits for deploy approval** (2026-11-21) | A run waiting for review holding the queue, so the next approval deploys an older commit |
+| **A week's trial of a t4g.small's memory on the t4g.medium, before shrinking again**: ClickHouse capped at 1.5 GiB, a 2 GiB swap file for heavy nights (2026-11-23) | Shrinking first and finding out from an OOM kill; the two sizes have the same CPU, so memory is the only question |
 | **Every version of the 10-day GTFS is archived**, not only the first of each day (2026-11-22) | A same-day update by the Ministry lost |
 | **Deletion is not irreversible** where the output is reproducible with compute | Treating 208 GB of intermediate files as precious |
 | What the project pays today is **private**; estimates from public rates are fine | Any comparison quoting the real invoice |

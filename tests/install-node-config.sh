@@ -52,6 +52,7 @@ cmp -s infra/node/systemd/stride-deploy.timer "$ROOT/etc/systemd/system/stride-d
 grep -qx 'enable --now stride-deploy.timer' "$CALLS" || fail "the deploy timer was not started"
 grep -qx 'enable --now siri-requester.timer' "$CALLS" || fail "the requester timer was not started"
 grep -qx 'enable --now gtfs-archive.timer' "$CALLS" || fail "the GTFS archive timer was not started"
+grep -qx 'enable --now swapfile.service' "$CALLS" || fail "the swap file was not turned on"
 grep -q 'restart clickhouse' "$CALLS" && fail "restarted ClickHouse although none of its files changed"
 
 run
