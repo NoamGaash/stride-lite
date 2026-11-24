@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 DIR=$(mktemp -d); trap 'rm -rf "$DIR"' EXIT
-mkdir -p "$DIR/bin" "$DIR/mot" "$DIR/s3" "$DIR/work"
+mkdir -p "$DIR/bin" "$DIR/mot" "$DIR/naim" "$DIR/s3" "$DIR/work"
 FILES=(israel-public-transportation.zip Gtfs_10_days.zip RouteNetworksByDate_10_Days.zip)
 
 # curl [-I] [-o FILE] URL. gtfs.mot.gov.il serves $DIR/mot; the archive bucket
@@ -20,6 +20,7 @@ for a; do
 done
 case \$url in
   https://gtfs.mot.gov.il/gtfsfiles/*) f="$DIR/mot/\${url##*/}" ;;
+  https://opendatasource.tel-aviv.gov.il/OpenData_Ducaments/*) f="$DIR/naim/\${url##*/}" ;;
   https://openbus-mot-archive.s3.amazonaws.com/*) f="$DIR/s3/\${url#https://openbus-mot-archive.s3.amazonaws.com/}" ;;
   *) exit 6 ;;
 esac
@@ -54,12 +55,17 @@ at() { if [ "$1" = israel-public-transportation.zip ]; then date -u -d "$2" +%Y/
 downloads() { grep -c '^0 https://gtfs.mot.gov.il' "$DIR/curl.calls" || true; }
 
 for f in "${FILES[@]}"; do publish "$f" '2026-11-20 01:47:53 UTC'; done
+echo "naim at 1" > "$DIR/naim/gtfs.zip"; touch -d '2026-11-20 23:00:17 UTC' "$DIR/naim/gtfs.zip"
 run || fail "archiving three published files failed"
 for f in "${FILES[@]}"; do
   archived "$(at "$f" '2026-11-20 01:47:53 UTC')" "$f" || fail "$f was not archived under the time the Ministry published it"
 done
 grep -q "Gtfs_10_days.zip at" "$DIR/s3/gtfs/2026/11/20/014753/Gtfs_10_days.zip" || fail "the archived file is not the Ministry's"
 [ -z "$(ls -A "$DIR/work")" ] || fail "a downloaded file was left on the node's disk"
+
+# Tel Aviv's weekend lines, from the city's portal, under a prefix of their own;
+# their twice-daily updates are each kept.
+[ -f "$DIR/s3/naim/gtfs/2026/11/20/230017/gtfs.zip" ] || fail "Naim BaSofash's GTFS was not archived"
 
 # Every few hours it looks again; a day already archived is not downloaded twice.
 run || fail "a run with nothing new failed"

@@ -315,6 +315,7 @@ jobs:
           systemctl is-active stride-deploy.timer
           systemctl is-active siri-requester.timer
           systemctl is-active gtfs-archive.timer
+          systemctl is-active naim-rt-request.timer
           # No Ministry key here, so a run is skipped rather than failed.
           sudo systemctl start siri-requester
           if systemctl is-failed --quiet siri-requester; then echo "a run with no key failed instead of being skipped"; exit 1; fi
@@ -364,9 +365,12 @@ jobs:
       - name: The SIRI requester stores a valid snapshot, falls back, and retries uploads
         working-directory: .
         run: tests/siri-request.sh
-      - name: The GTFS archive keeps each format once per day, and retries what failed
+      - name: The GTFS archive keeps each feed, the Ministry's and Tel Aviv's, and retries what failed
         working-directory: .
         run: tests/gtfs-archive.sh
+      - name: The Naim BaSofash requester keeps snapshots with vehicles, and retries uploads
+        working-directory: .
+        run: tests/naim-rt-request.sh
 
   differential:
     # Compares endpoints against the live production API, which is a non-profit's

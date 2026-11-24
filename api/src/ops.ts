@@ -33,6 +33,7 @@ export const LOG_SOURCES: Record<string, Source> = {
   api: { unit: 'stride-api' },
   requester: { unit: 'siri-requester' },
   'gtfs-archive': { unit: 'gtfs-archive' },
+  'naim-rt': { unit: 'naim-rt-request' },
 }
 
 export const DEFAULT_LINES = 200
