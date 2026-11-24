@@ -26,7 +26,7 @@ STUB
 chmod +x "$DIR"/bin/*
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
-run() { PATH=$DIR/bin:$PATH NAIM_RT_SPOOL=$DIR/spool SNAPSHOT_ID=$1 ./scripts/naim-rt-request.sh >/dev/null 2>&1; }
+run() { PATH=$DIR/bin:$PATH ARCHIVE_BUCKET=openbus-mot-archive NAIM_RT_SPOOL=$DIR/spool SNAPSHOT_ID=$1 ./scripts/naim-rt-request.sh >/dev/null 2>&1; }
 stored() { [ -f "$DIR/s3/naim/gtfs-rt/$1.pb" ]; }
 # Field 1, a 13-byte header, as the live feed sent on a Monday with no service.
 header='\012\015\012\0032.0\020\000\030\200\200\200\200\001'

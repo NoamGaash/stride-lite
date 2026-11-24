@@ -802,7 +802,7 @@ measured database is 163.98 GiB and the four projections it needs add 69.04 GiB 
 since, not predicted — so 233.02 GiB is the real requirement before any growth headroom.
 
 One instance and not two: measured peak query memory was ≤25 MB and the API is a stateless
-Node process, so `infra/main.tf` provisions a single box for both. A 1-year reserved rate
+Node process, so `deploy/aws/main.tf` provisions a single box for both. A 1-year reserved rate
 brings the total to about $75.
 Measured query memory was ≤25 MB, so 8 GB is not optimistic.
 

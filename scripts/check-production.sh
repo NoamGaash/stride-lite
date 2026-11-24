@@ -3,16 +3,17 @@
 # data fresh, is the database healthy, and do the answers still match
 # production's. Run by hand after a deploy or a change to the node, e.g.
 #
-#   scripts/check-production.sh
-#   API_URL=https://other.example scripts/check-production.sh
-#   SKIP_DIFF=1 scripts/check-production.sh     # without the 2-minute comparison
+#   API_URL=https://example.org scripts/check-production.sh
+#   API_URL=... SKIP_DIFF=1 scripts/check-production.sh  # without the 2-minute comparison
+#
+# deploy/<environment>/bin/check-production.sh runs it against that environment.
 #
 # Read-only, and it asks production (the differential suite) once per case,
 # spaced out, as api/tests/differential.test.ts does. Exits non-zero if any
 # check failed; every check runs either way.
 set -uo pipefail
 cd "$(dirname "$0")/.."
-API=${API_URL:-https://d2uqtzxw09mygh.cloudfront.net}
+API=${API_URL:?set API_URL to the deployment to check}
 failed=0
 pass() { echo "PASS  $*"; }
 fail() { echo "FAIL  $*"; failed=1; }

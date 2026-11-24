@@ -122,7 +122,7 @@
   וזה מה שהעלה את הממצאים ב-[docs/FINDINGS.he.md](docs/FINDINGS.he.md).
 - כתב את הטעינה הראשונה, כך שמכונה פרוסה מחזיקה את כל ההיסטוריה ולא רק את מה שהגיע אחרי
   שהיא עלתה: `scripts/first-load.sh`, חמישה שלבים שאפשר להמשיך מהם, מופעל כיחידת systemd
-  מתוך `infra/bootstrap.sh`.
+  מתוך `deploy/aws/bootstrap.sh`.
 - מדד את כל ארכיון ה-SIRI הציבורי בלי להוריד ממנו כלום — 288,970,717,345 בייט ב-2,794,246
   אובייקטים, ב-`LIST` ללא חתימה — ותמחר את שלוש הדרכים למלא מכונה מקובץ המחירים של AWS, בשני
   ה-regions ועבור שני המשלמים.
@@ -199,7 +199,7 @@
 
 `./up.sh 6` טוען שש שעות במקום שעתיים; `./up.sh 0` לא טוען היסטוריה כלל ורק מתקדם קדימה.
 
-תקרות המשאבים יושבות ב-[`ingest/local.xml`](ingest/local.xml), והן שם כי מכונת הייחוס של
+תקרות המשאבים יושבות ב-[`deploy/local/local.xml`](deploy/local/local.xml), והן שם כי מכונת הייחוס של
 הפרויקט היא תחנת עבודה של מישהו. על שרת ייעודי — להעלות אותן.
 
 בלי Docker, בלי root, בלי credentials — הנתונים ציבוריים.
@@ -480,13 +480,13 @@ up.sh             פקודה אחת: בינארי, שרת, סכמה, ingest, enr
 db/schema.sql     16 הטבלאות, כפי שנשלפו מהמסד הרץ
 ingest/           siri.sql (ingest), enrich.sql (שרשרת 6 צעדים), backfill.sh, local.xml
 api/              שירות TypeScript — src/{sql,registry,server,ch}.ts
-infra/main.tf     מודול Terraform
+deploy/aws/main.tf     מודול Terraform
 scripts/          apply-schema.sh, load-from-dump.sh
 docs/             BENCHMARKS.md (הדוח המלא), LOCAL-DB.md
 ```
 
 אם זה מתקדם לאנשהו, החלקים מתפצלים חזרה לריפויים של הסדנה — `db/` וה-ingest ל-
-`open-bus-stride-clickhouse`, `api/` ל-`open-bus-stride-api`, ו-`infra/` ל-`hasadna-iac`.
+`open-bus-stride-clickhouse`, `api/` ל-`open-bus-stride-api`, ו-`deploy/aws/` ל-`hasadna-iac`.
 הגבולות בין התיקיות נשמרים נקיים מהיום הראשון כדי שהפיצול הזה יהיה מכני ולא שכתוב.
 
 ## הסתייגויות, בכוונה בגוף ה-README
@@ -502,9 +502,9 @@ docs/             BENCHMARKS.md (הדוח המלא), LOCAL-DB.md
   שניות מול 0.063-0.090. אינדקסי B-tree על `lon`/`lat` הם הכלי הנכון שם, וסגירת הפער עם
   skip indexes היא עבודה שלא נעשתה.
 - הקלט היחיד שלא כומת בהערכת ה-AWS הוא **נפח התעבורה**. כל מחיר מגיע מקובצי התמחור של AWS
-  עצמה, מופק מחדש על ידי `scripts/fetch-rates.sh` לתוך [infra/rates.json](infra/rates.json),
+  עצמה, מופק מחדש על ידי `deploy/aws/bin/fetch-rates.sh` לתוך [deploy/aws/rates.json](deploy/aws/rates.json),
   וחישוב ודיסק הם 96% מהחשבון — אבל egress מעל הטרהבייט החינמי של CloudFront דורש נתון
-  תעבורה אמיתי. התוכנית היא להפנות את הפרונט לפריסה לכמה ימים; `scripts/measure-cost.py`
+  תעבורה אמיתי. התוכנית היא להפנות את הפרונט לפריסה לכמה ימים; `deploy/aws/bin/measure-cost.py`
   קיים כי החשבונית תראה אפס על תעבורה בתוך ה-free tier ולכן אינה יכולה לענות על השאלה. מה
   שהפרויקט משלם היום דווח לנו בפרטי ואינו בריפו הזה.
 - **ה-projections הם 30% מהנפח, כפי שנמדד.** ארבעה מהם מביאים את הסך הכל מ-163.98 GiB

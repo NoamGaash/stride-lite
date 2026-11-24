@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Creates the database, its tables, the migrations that have not run, the views
 # the API reads, and the projections it needs. Idempotent, and the single entry
-# point: infra/bootstrap.sh calls it on a new instance, scripts/deploy.sh on
+# point: deploy/aws/bootstrap.sh calls it on a new instance, deploy/aws/bin/deploy.sh on
 # every push, up.sh locally.
 #
 # The order is the point. Tables first, because a migration alters one. Migrations

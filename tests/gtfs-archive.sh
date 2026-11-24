@@ -46,7 +46,7 @@ publish() { # the Ministry publishes $1 with Last-Modified $2
 }
 run() {
   : > "$DIR/curl.calls"
-  PATH=$DIR/bin:$PATH GTFS_WORKDIR=$DIR/work ./scripts/gtfs-archive.sh >/dev/null 2>&1
+  PATH=$DIR/bin:$PATH ARCHIVE_BUCKET=openbus-mot-archive GTFS_WORKDIR=$DIR/work ./scripts/gtfs-archive.sh >/dev/null 2>&1
 }
 archived() { [ -f "$DIR/s3/gtfs/$1/$2" ]; }
 # Where a file published at $2 is expected: Hasadna's layout for the current

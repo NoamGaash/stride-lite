@@ -18,8 +18,8 @@ rm "$DIR/n"
 run 2 && fail "reported ready a server that never answered"
 
 # The deploy waits after the restart and before the first query.
-awk '/^ *(RESTART_CHANGED=1 )?\.\/scripts\/install-node-config.sh/ {i=NR} /^ *\.\/scripts\/wait-for-clickhouse.sh/ {w=NR} /^ *\.\/scripts\/apply-schema.sh/ && !a {a=NR}
-     END { exit !(i && w && a && i < w && w < a) }' scripts/deploy.sh \
-  || fail "scripts/deploy.sh applies the schema without waiting for the ClickHouse it may just have restarted"
+awk '/^ *(RESTART_CHANGED=1 )?\.\/(scripts|deploy\/aws\/bin)\/install-node-config.sh/ {i=NR} /^ *\.\/scripts\/wait-for-clickhouse.sh/ {w=NR} /^ *\.\/scripts\/apply-schema.sh/ && !a {a=NR}
+     END { exit !(i && w && a && i < w && w < a) }' deploy/aws/bin/deploy.sh \
+  || fail "deploy/aws/bin/deploy.sh applies the schema without waiting for the ClickHouse it may just have restarted"
 
 echo "wait-for-clickhouse: ok"

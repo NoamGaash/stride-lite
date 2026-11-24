@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Waits until ClickHouse answers a query. After a restart it loads its tables
-# first and refuses connections meanwhile, and scripts/deploy.sh restarts it
+# first and refuses connections meanwhile, and deploy/aws/bin/deploy.sh restarts it
 # (through install-node-config.sh) just before applying the schema: on
 # 2026-11-23 that order failed a deploy with "Connection refused" while the
 # server was a few seconds from ready.

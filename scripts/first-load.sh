@@ -3,7 +3,7 @@
 #
 #   ./scripts/first-load.sh
 #
-# infra/bootstrap.sh starts this as a systemd unit at the end of a launch, and
+# deploy/aws/bootstrap.sh starts this as a systemd unit at the end of a launch, and
 # before it existed a deploy produced a working API over an empty database:
 # the refreshable views in ingest/siri.sql poll the running hour, so data
 # accumulated from go-live forward and nothing before it existed, and
