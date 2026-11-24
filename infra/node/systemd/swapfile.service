@@ -1,0 +1,12 @@
+[Unit]
+Description=A 2 GiB swap file on the root volume
+Before=clickhouse.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/stride-lite/scripts/swapfile.sh
+ExecStop=/sbin/swapoff /swapfile
+
+[Install]
+WantedBy=multi-user.target

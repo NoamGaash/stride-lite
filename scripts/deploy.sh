@@ -44,6 +44,7 @@ if flock -w 600 9; then
   # Tables, then migrations, then views, then projections — the order
   # apply-schema.sh enforces, and the reason a view may read a column a
   # migration adds in the same deploy.
+  ./scripts/wait-for-clickhouse.sh
   ./scripts/apply-schema.sh
   # Only once the first load has installed them. Applying ingest/siri.sql to a
   # node still loading history would start the live chain alongside the load.
