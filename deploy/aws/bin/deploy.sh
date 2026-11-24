@@ -25,6 +25,21 @@ cd "$REPO"
 git fetch --depth 1 origin "$BRANCH"
 git reset --hard FETCH_HEAD
 
+# The Node major every environment runs: the Dockerfile, ci.yml and
+# bootstrap-node.sh name the same one. A node bootstrapped with an older one is
+# moved here, before npm ci builds against it.
+NODE_MAJOR=26
+node_major() { node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true; }
+if [ "$(node_major)" != "$NODE_MAJOR" ]; then
+  if command -v dnf >/dev/null; then
+    curl -fsSL "https://rpm.nodesource.com/setup_$NODE_MAJOR.x" | bash -
+    dnf install -y --allowerasing nodejs
+  else
+    curl -fsSL "https://deb.nodesource.com/setup_$NODE_MAJOR.x" | bash -
+    apt-get install -y nodejs
+  fi
+  [ "$(node_major)" = "$NODE_MAJOR" ] || { echo "Node is $(node_major), not $NODE_MAJOR" >&2; exit 1; }
+fi
 (cd api && npm ci --omit=dev)
 # deploy/aws/bin/siri-request.sh compresses with it; bootstrap installs it on a new node.
 command -v brotli >/dev/null || { command -v dnf >/dev/null && dnf install -y brotli || apt-get install -y brotli; }

@@ -3,7 +3,7 @@
 # the command; where ClickHouse is comes from the environment (deploy/hasadna/).
 FROM clickhouse/clickhouse-server:26.10 AS clickhouse
 
-FROM node:22-bookworm-slim
+FROM node:26-bookworm-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl python3 awscli unzip zstd \
  && rm -rf /var/lib/apt/lists/*
