@@ -377,6 +377,27 @@ jobs:
             done
           done
 
+  ensure-node-amazon-linux:
+    # The AWS node is Amazon Linux 2023: NodeSource through dnf, a path the
+    # Ubuntu jobs never take. A node with the previous major, moved to the
+    # current one the way a deploy moves it.
+    runs-on: ubuntu-24.04-arm
+    container: amazonlinux:2023
+    steps:
+      - run: dnf install -y --allowerasing tar gzip git curl
+      - uses: actions/checkout@v4
+      - name: A node bootstrapped with Node 22
+        run: |
+          curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
+          dnf install -y nodejs
+          /usr/bin/node --version | grep -q '^v22\.'
+      - name: ensure-node.sh moves it to the current major
+        run: |
+          deploy/aws/bin/ensure-node.sh
+          want=$(sed -n 's/^NODE_MAJOR=\${NODE_MAJOR:-\([0-9]*\)}/\1/p' deploy/aws/bin/ensure-node.sh)
+          /usr/bin/node --version | grep -q "^v$want\." || { /usr/bin/node --version; exit 1; }
+          deploy/aws/bin/ensure-node.sh   # and a second run changes nothing
+
   terraform:
     runs-on: ubuntu-latest
     defaults:
