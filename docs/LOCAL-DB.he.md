@@ -26,7 +26,7 @@
   ./clickhouse server                    # מאזין על 9000 (native) ו-8123 (HTTP)
   ```
 - `zstd`, `mawk` (או כל awk), `curl`.
-- Node 22 ל-API.
+- Node 26 ל-API.
 
 להפנות את הסקריפטים לבינארי שלכם אם הוא לא ב-`PATH`:
 

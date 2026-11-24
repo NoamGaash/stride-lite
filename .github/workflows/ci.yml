@@ -289,6 +289,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # What CI publishes on main, built here for the commits this job deploys:
+      # the checkout, and the branch head the timer moves to.
+      - name: The image, as pull-image.sh will look for it
+        env:
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          image=ghcr.io/${GITHUB_REPOSITORY,,}
+          docker build -t "$image:$(git rev-parse HEAD)" .
+          docker tag "$image:$(git rev-parse HEAD)" "$image:$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)"
       - name: Bootstrap
         env:
           BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -346,6 +355,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.base_ref }}
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+      - name: The branch's image, as pull-image.sh will look for it
+        run: docker build -t "ghcr.io/${GITHUB_REPOSITORY,,}:${{ github.event.pull_request.head.sha }}" head
       - name: Bootstrap from main
         env:
           BRANCH: ${{ github.head_ref }}
@@ -376,27 +391,6 @@ jobs:
               test -e "$p" || { echo "$f names $p, which does not exist"; exit 1; }
             done
           done
-
-  ensure-node-amazon-linux:
-    # The AWS node is Amazon Linux 2023: NodeSource through dnf, a path the
-    # Ubuntu jobs never take. A node with the previous major, moved to the
-    # current one the way a deploy moves it.
-    runs-on: ubuntu-24.04-arm
-    container: amazonlinux:2023
-    steps:
-      - run: dnf install -y --allowerasing tar gzip git curl
-      - uses: actions/checkout@v4
-      - name: A node bootstrapped with Node 22
-        run: |
-          curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
-          dnf install -y nodejs
-          /usr/bin/node --version | grep -q '^v22\.'
-      - name: ensure-node.sh moves it to the current major
-        run: |
-          deploy/aws/bin/ensure-node.sh
-          want=$(sed -n 's/^NODE_MAJOR=\${NODE_MAJOR:-\([0-9]*\)}/\1/p' deploy/aws/bin/ensure-node.sh)
-          /usr/bin/node --version | grep -q "^v$want\." || { /usr/bin/node --version; exit 1; }
-          deploy/aws/bin/ensure-node.sh   # and a second run changes nothing
 
   terraform:
     runs-on: ubuntu-latest

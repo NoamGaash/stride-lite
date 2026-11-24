@@ -27,7 +27,7 @@ Two routes. Pick by what you want to do.
   ./clickhouse server                    # listens on 9000 (native) and 8123 (HTTP)
   ```
 - `zstd`, `mawk` (or any awk), `curl`.
-- Node 22 for the API.
+- Node 26 for the API.
 
 Point the scripts at your binary if it is not on `PATH`:
 

@@ -23,6 +23,9 @@ put() {
   echo "installed $2"
 }
 
+# The API's image first: the unit installed below runs it. Tests skip this.
+[ "${PULL_IMAGE:-1}" = 0 ] || "$(dirname "$0")/pull-image.sh"
+
 clickhouse_changed=0
 units_changed=0
 

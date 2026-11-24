@@ -5,10 +5,12 @@ FROM clickhouse/clickhouse-server:26.10 AS clickhouse
 
 FROM node:26-bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl python3 awscli unzip zstd \
+ && apt-get install -y --no-install-recommends ca-certificates curl python3 awscli unzip zstd systemd \
  && rm -rf /var/lib/apt/lists/*
 # The client only; the server runs elsewhere. Same release as the server.
 COPY --from=clickhouse /usr/bin/clickhouse /usr/local/bin/clickhouse
+# systemd for journalctl alone: on a host that mounts its journal in, /ops/logs
+# reads the units' logs (deploy/aws/node/systemd/stride-api.service).
 
 WORKDIR /app
 COPY api/package.json api/package-lock.json api/

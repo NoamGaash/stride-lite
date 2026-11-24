@@ -10,6 +10,8 @@
 # and dnf keeps the old major's cached metadata: `dnf install nodejs` then
 # reports the old one as installed and changes nothing (measured on the AWS
 # node, 2026-11-24). --refresh drops that cache.
+# No longer called: the API runs from the image (pull-image.sh). Still here for
+# the one deploy whose deploy.sh, read before the checkout moved, calls it.
 set -euo pipefail
 NODE_MAJOR=${NODE_MAJOR:-26}
 major() { /usr/bin/node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true; }

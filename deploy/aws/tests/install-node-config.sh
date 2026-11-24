@@ -35,7 +35,7 @@ for f in deploy/aws/node/cron/*; do
   path=$(sed -n 's/^PATH=//p' "$f")
   case ":$path:" in *":$ch_dir:"*) ;; *) fail "$f runs \`clickhouse\` without $ch_dir on its PATH ('${path:-cron default}')" ;; esac
 done
-run() { : > "$CALLS"; NODE_ROOT=$ROOT SYSTEMCTL=$ROOT/systemctl RESTART_CHANGED=1 ./deploy/aws/bin/install-node-config.sh >/dev/null; }
+run() { : > "$CALLS"; PULL_IMAGE=0 NODE_ROOT=$ROOT SYSTEMCTL=$ROOT/systemctl RESTART_CHANGED=1 ./deploy/aws/bin/install-node-config.sh >/dev/null; }
 
 mkdir -p "$ROOT/etc/systemd/system" "$ROOT/etc/clickhouse-server" "$ROOT/etc/cron.d"
 cp deploy/aws/node/systemd/* "$ROOT/etc/systemd/system/"
