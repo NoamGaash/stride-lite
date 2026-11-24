@@ -17,7 +17,8 @@ major() { /usr/bin/node -p 'process.versions.node.split(".")[0]' 2>/dev/null || 
 [ "$(major)" = "$NODE_MAJOR" ] && exit 0
 if command -v dnf >/dev/null; then
   curl -fsSL "https://rpm.nodesource.com/setup_$NODE_MAJOR.x" | bash -
-  dnf install -y --allowerasing nodejs
+  dnf install -y --refresh --allowerasing nodejs
+  [ "$(major)" = "$NODE_MAJOR" ] || dnf upgrade -y --refresh nodejs
 else
   curl -fsSL "https://deb.nodesource.com/setup_$NODE_MAJOR.x" | bash -
   apt-get install -y nodejs
