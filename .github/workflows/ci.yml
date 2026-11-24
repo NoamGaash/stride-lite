@@ -372,7 +372,7 @@ jobs:
           curl -fsS http://127.0.0.1/healthz
           # Every unit and cron entry now names a path that exists.
           for f in /etc/systemd/system/stride-*.service /etc/systemd/system/siri-requester.service /etc/cron.d/stride-*; do
-            for p in $(grep -oE '/opt/stride-lite/[^ ;"]+' "$f"); do
+            for p in $(grep -oE "/opt/stride-lite/[^ ;\"']+" "$f"); do
               test -e "$p" || { echo "$f names $p, which does not exist"; exit 1; }
             done
           done
