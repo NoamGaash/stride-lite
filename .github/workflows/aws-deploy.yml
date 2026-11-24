@@ -7,8 +7,11 @@ name: deploy
 # instance on every push would destroy the data volume's backfill, which is the
 # expensive part. So the second step sends deploy/aws/bin/deploy.sh over SSM — the same
 # channel that exists because there is no key pair and no open port 22.
+# After the image of the commit is published: the node runs it.
 on:
-  push:
+  workflow_run:
+    workflows: [image]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -29,7 +32,7 @@ jobs:
     # main would be reporting the absence of a bucket as a broken build. Setting
     # both variables is what turns this on; gating on both means a half-finished
     # setup skips rather than failing somewhere in the middle.
-    if: vars.TF_STATE_BUCKET != '' && vars.AWS_ROLE_ARN != ''
+    if: vars.TF_STATE_BUCKET != '' && vars.AWS_ROLE_ARN != '' && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     # Set this environment up with a required reviewer to gate what reaches AWS.
     environment: aws
