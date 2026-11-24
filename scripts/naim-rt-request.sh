@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # One GTFS-RT vehicle-positions snapshot of Tel Aviv-Yafo's weekend lines,
 # "Naim BaSofash", at
-#   s3://openbus-mot-archive/naim/gtfs-rt/YYYY/MM/DD/HH/MM/SS.pb
-# Run every 10 seconds by infra/node/systemd/naim-rt-request.timer; the feed
+#   s3://$ARCHIVE_BUCKET/naim/gtfs-rt/YYYY/MM/DD/HH/MM/SS.pb
+# Run every 10 seconds by deploy/aws/node/systemd/naim-rt-request.timer; the feed
 # updates every 10 seconds, only while the service runs (Friday and Saturday).
 # Its trip_id and stop_id refer to the city's own GTFS, which
 # scripts/gtfs-archive.sh keeps under naim/gtfs/ (#74). No key, no allowlist.
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 URL=${NAIM_RT_URL:-https://api.goryde.com/api/v1/core/c/101/gtfs-rt/vehicle-positions}
-BUCKET=openbus-mot-archive
+BUCKET=${ARCHIVE_BUCKET:?set ARCHIVE_BUCKET to the bucket that keeps the feeds}
 SPOOL=${NAIM_RT_SPOOL:-/var/lib/naim-rt-request}
 now=$(date -u +%s)
 ID=${SNAPSHOT_ID:-$(date -u -d "@$((now / 10 * 10))" +%Y/%m/%d/%H/%M/%S)}

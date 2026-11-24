@@ -56,7 +56,7 @@ elif [ -n "${AWS_ACCESS_KEY_ID:-}" ]; then
   dest="S3('$URL', '$AWS_ACCESS_KEY_ID', '${AWS_SECRET_ACCESS_KEY:?AWS_ACCESS_KEY_ID is set without AWS_SECRET_ACCESS_KEY}')"
 else
   echo "Neither BACKUP_ROLE_ARN nor AWS_ACCESS_KEY_ID is set: the request will be" >&2
-  echo "sent unsigned, which only works against a public bucket. See infra/main.tf." >&2
+  echo "sent unsigned, which only works against a public bucket. See deploy/aws/main.tf." >&2
   dest="S3('$URL')"
 fi
 

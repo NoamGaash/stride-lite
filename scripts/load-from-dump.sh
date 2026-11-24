@@ -9,7 +9,7 @@
 #
 # A URL is the form a cloud first load uses, and not for convenience: the dump
 # is 144.01 GiB compressed and loads to 254.57 GiB, which together do not fit on
-# the 350 GB (326 GiB) volume infra/main.tf provisions. Staging it is not slower
+# the 350 GB (326 GiB) volume deploy/aws/main.tf provisions. Staging it is not slower
 # there, it is impossible. The cost of streaming is that an interrupted load
 # cannot resume — it starts over, and over somebody else's egress bill, which is
 # why scripts/first-load.sh prefers restoring a backup we already hold.

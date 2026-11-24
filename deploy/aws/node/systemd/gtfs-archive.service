@@ -1,0 +1,16 @@
+[Unit]
+Description=Copy the Ministry of Transport's GTFS files to the archive bucket
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/stride-lite/node.env
+Environment=ARCHIVE_BUCKET=openbus-mot-archive
+StateDirectory=gtfs-archive
+ExecStart=/opt/stride-lite/scripts/gtfs-archive.sh
+# Three files, the largest about 300 MB.
+TimeoutStartSec=1h
+# Background work on ClickHouse's node: the database comes first.
+CPUWeight=20
+IOWeight=20

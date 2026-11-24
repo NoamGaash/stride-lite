@@ -1,15 +1,6 @@
 #!/usr/bin/env bash
-# A 2 GiB swap file, for the nights a backfill or a heavy view wants more than
-# the RAM: slower then, instead of killed. Swappiness is low so that the API's
-# working set stays in RAM by day. Run at boot by swapfile.service; idempotent.
-set -euo pipefail
-F=${SWAPFILE:-/swapfile}
-
-sysctl -q vm.swappiness=10
-swapon --show=NAME --noheadings | grep -qx "$F" && exit 0
-if [ ! -f "$F" ]; then
-  fallocate -l 2G "$F"
-  chmod 600 "$F"
-  mkswap "$F" >/dev/null
-fi
-swapon "$F"
+# Moved to deploy/aws/bin/. Kept for the one deploy that crosses the move: a
+# node still on the old tree runs this path (from its systemd units, its cron
+# entries, the timer's auto-deploy.sh, and the SSM command in aws-deploy.yml)
+# before it has the new one. Delete once every node has deployed past it.
+exec "$(dirname "$0")/../deploy/aws/bin/$(basename "$0")" "$@"

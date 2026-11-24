@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Copies the Ministry of Transport's GTFS files to the archive bucket, keyed by
 # the file's own Last-Modified (UTC):
-#   s3://openbus-mot-archive/gtfs/YYYY/MM/DD/israel-public-transportation.zip
-#   s3://openbus-mot-archive/gtfs/YYYY/MM/DD/HHMMSS/<file>   (the 10-day format)
+#   s3://$ARCHIVE_BUCKET/gtfs/YYYY/MM/DD/israel-public-transportation.zip
+#   s3://$ARCHIVE_BUCKET/gtfs/YYYY/MM/DD/HHMMSS/<file>   (the 10-day format)
 # The first is the layout of Hasadna's gtfs_archive, kept so a reader of theirs
 # can read ours; it holds one version a day, as theirs does. Nothing reads the
 # 10-day format yet, so it carries the time too and every version is kept. Run
-# every few hours by infra/node/systemd/gtfs-archive.timer; a version already
+# every few hours by deploy/aws/node/systemd/gtfs-archive.timer; a version already
 # archived is skipped.
 #
 # The Ministry serves only its newest files, so a day nobody copies is gone.
@@ -30,7 +30,7 @@ FEEDS=(
   "$MOT/RouteNetworksByDate_10_Days.zip gtfs every"
   "$NAIM/gtfs.zip naim/gtfs every"
 )
-BUCKET=openbus-mot-archive
+BUCKET=${ARCHIVE_BUCKET:?set ARCHIVE_BUCKET to the bucket that keeps the feeds}
 WORK=${GTFS_WORKDIR:-/var/lib/gtfs-archive}
 
 mkdir -p "$WORK"

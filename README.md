@@ -55,6 +55,9 @@ results as production.
 | **Only the newest commit waits for deploy approval** (2026-11-21) | A run waiting for review holding the queue, so the next approval deploys an older commit |
 | **A week's trial of a t4g.small's memory on the t4g.medium, before shrinking again**: ClickHouse capped at 1.5 GiB, a 2 GiB swap file for heavy nights (2026-11-23) | Shrinking first and finding out from an OOM kill; the two sizes have the same CPU, so memory is the only question |
 | **Every version of the 10-day GTFS is archived**, not only the first of each day (2026-11-22) | A same-day update by the Ministry lost |
+| **Run under Hasadna's ArgoCD like the old project** (2026-11-24): ClickHouse alone on a Kamatera server on the internal network, and the API, migrations and ingest as images in `apps/openbus`. Asked by Hasadna's infrastructure maintainer, who would not run a server that pulls code from GitHub itself. Meanwhile the AWS node keeps deploying from main as today, until switched off by hand | A server outside ArgoCD that nobody but its author can operate |
+| **Everything particular to one environment under `deploy/<environment>/`** (2026-11-24): `aws`, `hasadna`, `local`, the code reading only environment variables, so a fork in Hasadna's organisation that sets its own runs end to end | AWS and Hasadna specifics woven through `scripts/` |
+| **Hasadna's SIRI requester stays the only one** (2026-11-24); features we want go to it as pull requests | A second requester behind the same allowlisted proxy, which together with Hasadna's would ask more often than the ICD allows |
 | **Tel Aviv's weekend lines, "Naim BaSofash", are archived too**: the city's GTFS and its GTFS-RT every 10 s (2026-11-23, [#74](https://github.com/NoamGaash/stride-lite/issues/74)) | A weekend nobody copies is gone; whether the Ministry's feeds carry these lines is unverified |
 | **Deletion is not irreversible** where the output is reproducible with compute | Treating 208 GB of intermediate files as precious |
 | What the project pays today is **private**; estimates from public rates are fine | Any comparison quoting the real invoice |
@@ -89,6 +92,8 @@ None of the following was requested. Each is a judgement call, and each could be
 | **A fresh instance loads the whole history by itself**, as a `oneshot` unit rather than a command somebody remembers to run | A deploy that leaves an empty database is a deploy that does not work, and "run this afterwards" is a step that gets skipped. Five resumable stages, state on the data volume: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) §"What the first deploy leaves you with" | — |
 | **A restorable copy of the database in our own S3, at $5.86 a month**, preferred over rebuilding from public data | Reading `s3://openbus-stride-public` is billed to Hasadna, so "download once, ever" has to be a property of the design and not a habit. First instance rebuilds and publishes; every later one restores, in 35 minutes and for nothing | A cheaper storage class, or a project that would rather spend days of compute than $70 a year |
 | **us-east-1 stays, re-priced against the bulk load** | eu-west-1 would spend $120.72 a year of ours to save $3.75 of Hasadna's once and $1.32 a year after. Measured both ways from AWS's own price list on 2026-11-07 | A measurement of latency from Israel, which has never been taken |
+| **Old script paths kept as one-line shims for the deploy that crosses the move**, and a CI job that bootstraps a node from main and lets its timer deploy the branch | The running node calls `scripts/deploy.sh` from its units, its cron, the old `auto-deploy.sh` and the SSM command before it has the new tree; without the shims that deploy fails half way | Deleting the shims in the next PR, once the node has deployed past them |
+| **`deploy/hasadna/` holds a README, not copies** | The chart and the server definition live in hasadna-k8s and hasadna-iac, where Hasadna reviews them; a copy here would drift | — |
 | **`api_domain` optional and off by default**, with the CloudFront name as the fallback | A name in `hasadna.org.il` needs a record in a Cloudflare zone this repository does not own, so it cannot be a precondition for deploying. But the frontend's CSP allows `*.hasadna.org.il` only, so the opt-in cannot be switched on without one | Someone adding the two DNS records, which is all it takes |
 
 ### What the agent actually did
@@ -118,7 +123,7 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
   [docs/FINDINGS.md](docs/FINDINGS.md).
 - Wrote the first load, so a deployed node holds the whole history rather than whatever
   arrived after it booted: `scripts/first-load.sh`, five resumable stages, started as a
-  systemd unit by `infra/bootstrap.sh`.
+  systemd unit by `deploy/aws/bootstrap.sh`.
 - Measured the whole public SIRI archive without downloading any of it — 288,970,717,345
   bytes in 2,794,246 objects, by unsigned `LIST` — and priced all three ways to fill a node
   from AWS's own price list, in both regions, for both payers.
@@ -132,7 +137,8 @@ Measured, in a session, and reproducible by [docs/LOCAL-DB.md](docs/LOCAL-DB.md)
   Ministry's files are missing from Hasadna's archive itself (1,214 and 547 of ~1,430), and
   production is empty for the same hours, so neither ingest lost them. The Ministry's own ICD
   (SM 2.8, §7.15 and §7.18) builds a new answer every 15 seconds and allows a request that
-  often, which is why the second requester asks four times a minute.
+  often, which is why the second requester asks four times a minute. The cause itself, as
+  the user learned on 2026-11-23: a fault on the Ministry's server, not in Hasadna's requester.
 - Resized the node from `t4g.large` to `t4g.medium` on measured memory, and added a week of
   per-minute load and memory history to `/ops/metrics`, as average, p95 and maximum.
 - Traced 141,147 `NOT_IMPLEMENTED` errors in `system.errors` to ClickHouse's speculative set
@@ -209,7 +215,7 @@ filter marked `x-lookup: indexed` or `scan`. The mark is read from `db/schema.sq
 To work on the code itself, open the repository in its dev container (`.devcontainer/`). It brings Node, Hurl, Terraform, the AWS CLI and the ClickHouse binary at CI's versions, and starts nothing until you run `./up.sh`.
 
 No Docker, no root, no credentials — the data is public. The resource ceilings are in
-[`ingest/local.xml`](ingest/local.xml) and exist because the reference machine for this
+[`deploy/local/local.xml`](deploy/local/local.xml) and exist because the reference machine for this
 project is somebody's workstation; on a dedicated host, raise them. The full reproduction, including the
 13.7-billion-row dump, is in [docs/LOCAL-DB.md](docs/LOCAL-DB.md); cost and cloud resources
 are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
@@ -480,18 +486,23 @@ is argued in [ROADMAP.md](ROADMAP.md).
 
 ```
 up.sh             one command: binary, server, schema, ingest, enrichment, API
-db/schema.sql     the 16 tables, dumped from the running instance
-ingest/           siri.sql (ingest), enrich.sql (6-step chain), gtfs-link.sql (SIRI → GTFS),
-                  duration-history.sql (past durations), backfill.sh, local.xml
 api/              TypeScript service — src/{sql,registry,server,ch}.ts
-infra/main.tf     Terraform module
-scripts/          apply-schema.sh, load-from-dump.sh
-docs/             BENCHMARKS.md (the full measured report), LOCAL-DB.md
+db/               schema.sql (the 16 tables), views.sql, migrations/
+ingest/           siri.sql (ingest), enrich.sql (6-step chain), gtfs-link.sql (SIRI → GTFS),
+                  duration-history.sql (past durations), catchup.sh, gtfs.sh, backfill.sh
+scripts/          tools that run anywhere: apply-schema.sh, migrate.sh, first-load.sh,
+                  backup.sh, gtfs-archive.sh, naim-rt-request.sh, check-production.sh, ...
+tests/            tests of the above
+deploy/aws/       the AWS node: Terraform, systemd units, cron, bootstrap, deploy.sh, its tests
+deploy/hasadna/   README only: what lives in hasadna-iac and hasadna-k8s
+deploy/local/     ClickHouse settings for a workstation, used by up.sh
+docs/             BENCHMARKS.md (the full measured report), DEPLOYMENT.md, LOCAL-DB.md
 ```
 
-If this goes anywhere, the pieces split back into the org's repos — `db/` and ingest into
-`open-bus-stride-clickhouse`, `api/` into `open-bus-stride-api`, `infra/` into `hasadna-iac`.
-The directory boundaries are kept clean from day one so that split is mechanical.
+Everything particular to one environment is under `deploy/<environment>/` and reaches the rest
+as an environment variable (`CH_URL`, `API_URL`, `ARCHIVE_BUCKET`, ...); `tests/boundary.sh`
+fails CI if an account id, a domain or a host path appears outside it. So a fork that sets its
+own values runs end to end, and retiring an environment is deleting its directory.
 
 ## Honest caveats
 
@@ -508,10 +519,10 @@ The directory boundaries are kept clean from day one so that split is mechanical
   against 0.063–0.090 s. B-tree indexes on `lon`/`lat` are the right tool there, and closing
   the gap with skip indexes is work not yet done.
 - The AWS estimate's one unquantified input is **traffic volume**. Every rate comes from AWS's
-  own price list, regenerated by `scripts/fetch-rates.sh` into
-  [infra/rates.json](infra/rates.json), and compute and disk are 96% of the bill — but egress
+  own price list, regenerated by `deploy/aws/bin/fetch-rates.sh` into
+  [deploy/aws/rates.json](deploy/aws/rates.json), and compute and disk are 96% of the bill — but egress
   above CloudFront's free 1 TB needs a real traffic figure. The plan is to point the frontend
-  at the deployment for a few days; `scripts/measure-cost.py` exists because the invoice will
+  at the deployment for a few days; `deploy/aws/bin/measure-cost.py` exists because the invoice will
   read $0 for egress under the free tier and so cannot answer the question. What the project
   pays today was reported privately and is not in this repository.
 - **Projections are 30% of the footprint, measured.** Four of them take the total from

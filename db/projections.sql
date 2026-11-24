@@ -18,7 +18,7 @@
 -- which cannot return a row from production for any input. See docs/FINDINGS.md.
 --
 -- Building them is I/O bound: about 25 minutes each under the local 40 MB/s
--- write cap in ingest/local.xml, and far less on an unthrottled disk.
+-- write cap in deploy/local/local.xml, and far less on an unthrottled disk.
 --
 --   clickhouse client --database stride --multiquery < db/projections.sql
 --

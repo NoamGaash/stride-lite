@@ -12,10 +12,10 @@
 150, ומתחת לו במחירי on-demand בלי שום התחייבות.
 
 כל מחיר כאן מגיע מקובצי התמחור הרשמיים של AWS, תוקף **01/11/2026**, ושמור ב-
-[infra/rates.json](../infra/rates.json). הוא מופק מחדש ולא מועתק ביד:
+[deploy/aws/rates.json](../deploy/aws/rates.json). הוא מופק מחדש ולא מועתק ביד:
 
 ```bash
-./scripts/fetch-rates.sh          # מוריד את קובצי התמחור ומייצר מחדש את infra/rates.json
+./deploy/aws/bin/fetch-rates.sh          # מוריד את קובצי התמחור ומייצר מחדש את deploy/aws/rates.json
 ```
 
 הערכה שאף אחד לא יכול לגזור מחדש היא הערכה שאף אחד לא צריך לפעול לפיה. לכן זה סקריפט ולא
@@ -104,7 +104,7 @@ GTFS רץ יומית במקום להתיישן, והשורות הגולמיות 
 זול יותר מלתכנן לשלוש.
 
 **למה מכונה אחת ולא שתיים:** שיא הזיכרון שנמדד בשאילתה היה **25 מגהבייט ומטה**, וה-API הוא
-תהליך Node ללא מצב. `infra/main.tf` מקים מכונה אחת בדיוק.
+תהליך Node ללא מצב. `deploy/aws/main.tf` מקים מכונה אחת בדיוק.
 
 ### יום ראשון
 
@@ -181,7 +181,7 @@ EC2 מפסיק את תשלום החישוב; כל מה שמחובר אליה מ�
 
 שני דברים נובעים מזה. **להגדיל את המכונה, לא להקטין** — חישוב הוא 6% מהחשבון הזה, אז
 `m7g.xlarge` עם ארבע ליבות עולה 4 דולר במקום 2 וחוצה כל המתנה. ו-**כתובת ה-IPv4 ניתנת
-להימנעות**: `infra/main.tf` כבר מחבר תפקיד SSM, אז אפשר להגיע למכונה בלעדיה, מה שמוריד
+להימנעות**: `deploy/aws/main.tf` כבר מחבר תפקיד SSM, אז אפשר להגיע למכונה בלעדיה, מה שמוריד
 ל-**30 דולר**.
 
 **האם חמש שעות מספיקות להשלים שבוע חסר?** נמדד, ingest ו-enrichment יחד: **14.7 שניות לשעת
@@ -233,7 +233,7 @@ EC2 מפסיק את תשלום החישוב; כל מה שמחובר אליה מ�
 והמספרים ב"יום ראשון".
 
 האסימטריה היא כל העניין. השבתה מתקנת את עצמה בכוח חישוב; **כסף שיצא לא חוזר.** לכן
-`infra/main.tf` נושא שומר אחד בדיוק, `aws_budgets_budget`, ב-50, 80 ו-100 אחוז מ-`budget_usd`
+`deploy/aws/main.tf` נושא שומר אחד בדיוק, `aws_budgets_budget`, ב-50, 80 ו-100 אחוז מ-`budget_usd`
 שברירת המחדל שלו היא יעד ה-150 דולר של הפרוייקט.
 
 מה שזה **לא** מכסה: אם ה-requesters ייעצרו, הארכיון ייעצר, ושום דבר במורד הזרם לא יכול לשחזר
@@ -251,9 +251,9 @@ EC2 מפסיק את תשלום החישוב; כל מה שמחובר אליה מ�
 אז למדוד את הבתים, לא את החשבון:
 
 ```bash
-cd infra && terraform output measure_cost_command     # מדפיס את השורה למטה, מלאה
-scripts/measure-cost.py collect --distribution E… --instance i-… --days 3 > usage.json
-scripts/measure-cost.py price usage.json
+cd deploy/aws && terraform output measure_cost_command     # מדפיס את השורה למטה, מלאה
+deploy/aws/bin/measure-cost.py collect --distribution E… --instance i-… --days 3 > usage.json
+deploy/aws/bin/measure-cost.py price usage.json
 ```
 
 `collect` קורא `BytesDownloaded` ו-`Requests` מ-CloudWatch; `price` לא צריך שום הרשאה ומדווח
@@ -330,7 +330,7 @@ git clone https://github.com/NoamGaash/stride-lite && cd stride-lite
 ```
 
 זה הכל. `up.sh` מוריד את הבינארי של ClickHouse, מריץ אותו תחת תקרות המשאבים
-ב-`ingest/local.xml`, יוצר את 16 הטבלאות ואת טבלת הנחיתה הגולמית, מתקין את שרשראות ה-ingest
+ב-`deploy/local/local.xml`, יוצר את 16 הטבלאות ואת טבלת הנחיתה הגולמית, מתקין את שרשראות ה-ingest
 וה-enrichment, טוען שעתיים של SIRI חי מ-S3, ומרים את ה-API על :8080.
 
 `./up.sh 6` טוען שש שעות; `./up.sh 0` לא טוען היסטוריה.
@@ -373,7 +373,7 @@ FROM system.view_refreshes;
 
 **VM, לא שירות קונטיינרים.** ClickHouse כאן הוא node יחיד עם מצב ועם דיסק מחובר של 350 GB;
 ECS או Fargate היו מוסיפים שכבת תזמור סביב תהליך אחד ארוך-חיים שלעולם לא צריך תזמון מחדש.
-`infra/main.tf` מקצה:
+`deploy/aws/main.tf` מקצה:
 
 | משאב Terraform | מה זה | למה |
 | --- | --- | --- |
@@ -384,11 +384,11 @@ ECS או Fargate היו מוסיפים שכבת תזמור סביב תהליך �
 | `aws_iam_role.instance` ומדיניות SSM | instance profile | גישת shell דרך SSM, ולכן אין מפתח לנהל |
 | `aws_s3_bucket.backup` ו-role ש-ClickHouse מתחזה אליו | `stride-lite-backup-<account-id>` | העותק שממנו אפשר לשחזר את ה-DB, כדי שמכונה חדשה תמלא את עצמה בשעה. `prevent_destroy`, מאותה סיבה שיש לכרך הדאטא |
 | `aws_acm_certificate.api`, כש-`api_domain` מוגדר | תעודה ב-us-east-1 | CloudFront קורא תעודות משם ומשום מקום אחר |
-| `infra/bootstrap.sh` כ-`user_data` | מתקין ClickHouse, Node, הסכמה, ה-cron-ים, ומפעיל את הטעינה הראשונה | מכונה שעלתה מגישה את ה-API, וממלאת את עצמה, בלי שום צעד נוסף |
+| `deploy/aws/bootstrap.sh` כ-`user_data` | מתקין ClickHouse, Node, הסכמה, ה-cron-ים, ומפעיל את הטעינה הראשונה | מכונה שעלתה מגישה את ה-API, וממלאת את עצמה, בלי שום צעד נוסף |
 | `aws_budgets_budget.monthly` | מתריע ב-50, 80 ו-100 אחוז מ-`budget_usd` | הכשל היחיד כאן שאינו בר-שחזור הוא כסף |
 
 ```bash
-cd infra
+cd deploy/aws
 terraform init
 terraform apply -var budget_email=you@example.org
 ```
@@ -454,16 +454,16 @@ CloudFront, וזה cache שני, סיום TLS שני ומקום שני לדבג.
 
 ה-apply **נעצר** עד שרשומת האימות קיימת — `aws_acm_certificate_validation` עם timeout של 60
 דקות. זו הצורה המכוונת: החלופה היא apply שמצליח ו-distribution שמגיש תעודה לשם שאף אחד לא יכול
-לפענח. הבדיקה ב-`deploy.yml` משתמשת ב-`api_origin_url` ולא ב-`api_url` מאותה סיבה — השאלה אם
+לפענח. הבדיקה ב-`aws-deploy.yml` משתמשת ב-`api_origin_url` ולא ב-`api_url` מאותה סיבה — השאלה אם
 מישהו אחר הוסיף רשומת DNS אינה תנאי להצלחת ה-deploy שלנו.
 
 ### פריסה מה-CI, ומה צריך להתקיים קודם
 
-`.github/workflows/deploy.yml` רץ על כל push ל-`main`. הוא עושה שני דברים, כי אלה שני דברים
+`.github/workflows/aws-deploy.yml` רץ על כל push ל-`main`. הוא עושה שני דברים, כי אלה שני דברים
 ורק הראשון הוא של Terraform:
 
 1. `terraform plan` ו-`terraform apply`, שמביאים את משאבי AWS שלמעלה למצב הרצוי.
-2. `scripts/deploy.sh` על המכונה, נשלח דרך SSM, וזה מה שבאמת מעלה לשם קוד חדש.
+2. `deploy/aws/bin/deploy.sh` על המכונה, נשלח דרך SSM, וזה מה שבאמת מעלה לשם קוד חדש.
 
 הצעד השני אינו מיותר. `bootstrap.sh` הוא `user_data`, כלומר הוא רץ פעם אחת לכל עליית מכונה,
 ו-`user_data_replace_on_change = false` נבחר בכוונה: push לא אמור להחליף את המכונה, כי
@@ -477,7 +477,7 @@ CloudFront, וזה cache שני, סיום TLS שני ומקום שני לדבג.
 | --- | --- |
 | דלי S3 בשם `stride-lite-tfstate-<account-id>` | ה-state של Terraform. עם state מקומי כל ריצת CI מתחילה מאפס ומנסה ליצור את מה שקיים |
 | GitHub כ-OIDC identity provider בחשבון | רשומה אחת, משותפת לכל מה שהחשבון הזה יבטח ב-GitHub לגביו בעתיד |
-| Role שנושא את `infra/github-oidc-trust.json` כ-trust ואת `infra/deployer-policy.json` כהרשאות | מה שה-CI הופך להיות. אין access key, לא כאן ולא בהגדרות הריפו |
+| Role שנושא את `deploy/aws/github-oidc-trust.json` כ-trust ואת `deploy/aws/deployer-policy.json` כהרשאות | מה שה-CI הופך להיות. אין access key, לא כאן ולא בהגדרות הריפו |
 | Variables: `TF_STATE_BUCKET` ו-`AWS_ROLE_ARN` | **variables** של הריפו ולא secrets: ה-workflow בודק את שניהם, ולכן ערך שהוגדר כ-secret משאיר את ה-job מדלג בשקט. `AWS_REGION` אופציונלי — בלעדיו ה-workflow משתמש ב-`us-east-1` |
 
 **אין שום secret להגדיר.** ה-job מציג את ה-token ש-GitHub מנפיק לו ומקבל credentials שתוקפם
@@ -506,12 +506,12 @@ aws iam create-open-id-connect-provider \
   --url https://token.actions.githubusercontent.com \
   --client-id-list sts.amazonaws.com
 
-sed "s|\${ACCOUNT}|$ACCOUNT|" infra/github-oidc-trust.json > /tmp/trust.json
+sed "s|\${ACCOUNT}|$ACCOUNT|" deploy/aws/github-oidc-trust.json > /tmp/trust.json
 aws iam create-role --role-name GitHubActionsStrideLiteDeployer \
   --assume-role-policy-document file:///tmp/trust.json
 aws iam put-role-policy --role-name GitHubActionsStrideLiteDeployer \
   --policy-name StrideLiteTerraformDeployer \
-  --policy-document file://infra/deployer-policy.json
+  --policy-document file://deploy/aws/deployer-policy.json
 
 aws iam get-role --role-name GitHubActionsStrideLiteDeployer \
   --query Role.Arn --output text   # זה ה-variable בשם AWS_ROLE_ARN
@@ -569,7 +569,7 @@ policy מכיר בריפו אחד.
 catch-up"), כי הוא מתקדם מה-snapshot האחרון שנטען בפועל ולא היה כזה. שום דבר לא טען היסטוריה.
 deploy ייצר API שענה לכל שאילתה ברשימה ריקה.
 
-`infra/bootstrap.sh` מסיים עכשיו בהפעלת `stride-first-load.service`, יחידת `oneshot` שמריצה את
+`deploy/aws/bootstrap.sh` מסיים עכשיו בהפעלת `stride-first-load.service`, יחידת `oneshot` שמריצה את
 [`scripts/first-load.sh`](../scripts/first-load.sh) פעם אחת. חמישה שלבים, כל אחד נדלג כשקובץ
 המצב שעל כרך הדאטא אומר שהוא הסתיים:
 
@@ -592,7 +592,7 @@ deploy ייצר API שענה לכל שאילתה ברשימה ריקה.
 
 **היא אינה רצה במקביל ל-ingest.** היחידה לוקחת את `/var/lock/stride-catchup`, אותו מנעול
 שה-cron השעתי של `catchup.sh` כבר לוקח ב-`flock -n`, כך שתקתוק בזמן טעינה ראשונה פשוט אינו רץ
-במקום להצטבר מאחוריה. `scripts/deploy.sh` לוקח את אותו מנעול בהמתנה של עשר דקות, ואם אינו
+במקום להצטבר מאחוריה. `deploy/aws/bin/deploy.sh` לוקח את אותו מנעול בהמתנה של עשר דקות, ואם אינו
 מקבל אותו — מעדכן את הקוד ומשאיר את הסכמה ל-deploy הבא.
 
 **השרשרת החיה מותקנת אחרי ההיסטוריה ולא לפניה.** ה-dump נושא את ערכי ה-`id` שלו וה-enrichment
@@ -656,7 +656,7 @@ aws ssm send-command --instance-ids "$ID" --document-name AWS-RunShellScript \
 והוא בדיוק זה שמפתה.
 
 **כבר ציבורי, כי הריפו ציבורי:** כל מדידה וממצא ב-`docs/`, מודל העלות (הוא נגזר ממחירון AWS
-הפומבי ולא מחשבון), `infra/` כולל `bootstrap.sh`, והלוגים של כל ריצת Actions. ה-API עצמו נועד
+הפומבי ולא מחשבון), `deploy/aws/` כולל `bootstrap.sh`, והלוגים של כל ריצת Actions. ה-API עצמו נועד
 להיות ציבורי — הוא מגיש נתוני משרד התחבורה שכבר פומביים — וכך גם הנתונים.
 
 **בטוח לפרסם, וכדאי:**
@@ -668,7 +668,7 @@ aws ssm send-command --instance-ids "$ID" --document-name AWS-RunShellScript \
 | `GET /coverage` — בריאות הדאטא לכל יום מתוך `ingest_day_health`: `day`, `snapshots`, `vehicle_locations`, `duplicate_ids`, `rides`, `rides_with_duration`, `rides_linked_to_gtfs`, `measured_at`, החדש קודם, `?limit=` שברירת המחדל שלו 90 והתקרה 10,000 | ציבורי מאותה סיבה, והוא עונה על השאלה שהפרודקשן אינו יכול. ממצא 13 הוא עשרים חודשים של "אפס אוטובוסים נסעו" שנקראים כמו דאטא ולא כמו תקלה, כי `/gtfs_rides_agg/group_by` מחזיר 0 בשני המקרים. כאן יום אומר כמה snapshots הגיעו, כמה שורות נגזרו מהם, והאם ה-id-ים שלו תקינים — כך ש"לא נסעו", "לא הגיע" ו"אנחנו שברנו" הם שלוש שורות שונות ולא אחת |
 | `GET /ops/metrics` — דיסק פנוי, גודל הטבלאות, mutations ו-merges שרצים (בניית projection יורדת כאן), היסטוריית רענונים, שגיאות ClickHouse ביממה האחרונה, זיכרון ועומס, ומספר הבקשות ל-API וה-latency שלהן (p50/p95) לכל endpoint בשעה האחרונה, ועוד חמשת הנתיבים השכיחים שאינם endpoint (סורקים, טעויות הקלדה), מקוצרים ל-80 תווים ומושחרים, וכל השאר בשורה אחת `other`. cache של 15 שניות | ציבורי כדי שכל אחד יוכל לעקוב אחרי המכונה ולעזור. הוא לא קורא שום טבלה שרושמת כתובת לקוח, וספירת הבקשות שומרת את הנתיב ושום דבר על מי ששלח |
 | `GET /ops/logs` — סוף הלוגים של `first-load`, `catchup`, `gtfs`, `clickhouse` וה-journal של ה-API; `?source=` בוחר אחד, `?lines=` ברירת מחדל 200 ותקרה 2,000. cache של 15 שניות | רשימה סגורה, בלי פרמטר נתיב. אף אחד מהם אינו לוג בקשות, ואסור שיהפוך לכזה: זה מה ששומר את כתובות המבקרים בחוץ. כתובות IPv4/IPv6 ומספר חשבון ה-AWS מושחרים מכל שורה כקו הגנה שני |
-| `infra/rates.json` ו-`scripts/measure-cost.py` | מחירים פומביים וסקריפט. הערכה שאי אפשר לשחזר היא הערכה שאסור לפעול לפיה |
+| `deploy/aws/rates.json` ו-`deploy/aws/bin/measure-cost.py` | מחירים פומביים וסקריפט. הערכה שאי אפשר לשחזר היא הערכה שאסור לפעול לפיה |
 
 **דלי ה-state נשאר פרטי, והסיבה הכנה אינה סודות.** הקונפיגורציה הזאת לא יוצרת שום דבר שמייצר
 credential — אין סיסמת מסד, אין access key, אין תעודה — ולכן אין היום סוד בקובץ ה-state. מה שיש
@@ -777,7 +777,7 @@ Redis, בלי Airflow. ה-scheduler הוא `REFRESH EVERY` בתוך מסד הנ�
 
 הפסקה הזאת נהגה להוסיף "והמכונה הגדולה גם מרימה את תקרת 4 GiB ש-`/siri_rides/list` בלי סינון
 נתקל בה". המדידה ההיא נעשתה מול תקרה של 4 GiB, והתקרה המקומית היא עכשיו 8 GiB
-(`ingest/local.xml`), שנבחרה כדי להתאים ל-`t4g.large` שהמודול הזה באמת פורס — כלומר המספר הישן
+(`deploy/local/local.xml`), שנבחרה כדי להתאים ל-`t4g.large` שהמודול הזה באמת פורס — כלומר המספר הישן
 מדד מכונה מחמירה מהיעד ואינו אומר דבר על זו. **האם 8 GiB מספיקים לקריאה הזאת אינו נמדד.**
 למדוד מחדש פירושו להריץ join תלת-כיווני בלי סינון על ה-DB המשותף שאליו שרשרות ה-ingest
 וה-enrichment כותבות, ו-`MEMORY_LIMIT_EXCEEDED` שם אינו מוגבל לשאילתה שגרמה לו. כדאי לעשות את

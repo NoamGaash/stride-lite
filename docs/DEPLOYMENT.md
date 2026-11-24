@@ -12,11 +12,11 @@ Five questions, answered with what was measured. Anything not measured is labell
 target, and under it on on-demand rates with nothing committed.
 
 Every rate below comes from AWS's own published price list, effective **2026-11-01**, and is
-checked into [infra/rates.json](../infra/rates.json). It is regenerated rather than
+checked into [deploy/aws/rates.json](../deploy/aws/rates.json). It is regenerated rather than
 transcribed:
 
 ```bash
-./scripts/fetch-rates.sh          # pulls the offer files and rewrites infra/rates.json
+./deploy/aws/bin/fetch-rates.sh          # pulls the offer files and rewrites deploy/aws/rates.json
 ```
 
 An estimate nobody can re-derive is an estimate nobody should act on, which is why this is a
@@ -112,7 +112,7 @@ EBS volumes grow online and never shrink, so there is no reason to buy headroom 
 sizing for a year and raising it later is strictly cheaper than sizing for three.
 
 **Why one instance and not two:** measured peak query memory was **≤25 MB** and the API is a
-stateless Node process. `infra/main.tf` provisions exactly one.
+stateless Node process. `deploy/aws/main.tf` provisions exactly one.
 
 ### Day one
 
@@ -195,7 +195,7 @@ is roughly 21.7 hours of compute a month:
 
 Two things follow. **Size the instance up, not down** — compute is 6% of that bill, so an
 `m7g.xlarge` with four cores costs $4 instead of $2 and halves every wait. And **the public
-IPv4 is avoidable**: `infra/main.tf` already attaches an SSM role, so the instance can be
+IPv4 is avoidable**: `deploy/aws/main.tf` already attaches an SSM role, so the instance can be
 reached without one, bringing it to **$30**.
 
 **Can five hours absorb a week of missed data?** Measured, ingest and enrichment together:
@@ -251,7 +251,7 @@ Hasadna's money, and the copy turns that into 35 minutes and nothing. It is not 
 is the first load, and §"Day one" has the numbers.
 
 The asymmetry is the point. Downtime is recoverable with compute; **money spent is not
-recoverable at all.** So `infra/main.tf` carries exactly one guard, `aws_budgets_budget`, at
+recoverable at all.** So `deploy/aws/main.tf` carries exactly one guard, `aws_budgets_budget`, at
 50%, 80% and 100% of a `budget_usd` that defaults to the project's own $150 target.
 
 What this does **not** cover: if the requesters stop, the archive stops, and nothing
@@ -272,9 +272,9 @@ invoice.
 So measure the bytes, not the bill:
 
 ```bash
-cd infra && terraform output measure_cost_command     # prints the line below, filled in
-scripts/measure-cost.py collect --distribution E… --instance i-… --days 3 > usage.json
-scripts/measure-cost.py price usage.json
+cd deploy/aws && terraform output measure_cost_command     # prints the line below, filled in
+deploy/aws/bin/measure-cost.py collect --distribution E… --instance i-… --days 3 > usage.json
+deploy/aws/bin/measure-cost.py price usage.json
 ```
 
 `collect` reads `BytesDownloaded` and `Requests` from CloudWatch; `price` needs no credentials
@@ -353,7 +353,7 @@ git clone https://github.com/NoamGaash/stride-lite && cd stride-lite
 ```
 
 That is all of it. `up.sh` fetches the ClickHouse binary, starts it under the resource
-ceilings in `ingest/local.xml`, creates the 16 tables and the raw landing table, installs the
+ceilings in `deploy/local/local.xml`, creates the 16 tables and the raw landing table, installs the
 ingest and enrichment chains, backfills two hours of live SIRI from S3, and starts the API on
 :8080. `./up.sh 6` backfills six hours; `./up.sh 0` backfills none.
 
@@ -396,7 +396,7 @@ Full detail, including how to keep the load from taking your machine down, is in
 
 **A VM, not a container service.** ClickHouse here is a stateful single node with a 350 GB
 attached disk; ECS or Fargate would add an orchestration layer around one long-lived process
-that never needs rescheduling. `infra/main.tf` provisions:
+that never needs rescheduling. `deploy/aws/main.tf` provisions:
 
 | Terraform resource | What it is | Why |
 | --- | --- | --- |
@@ -407,11 +407,11 @@ that never needs rescheduling. `infra/main.tf` provisions:
 | `aws_iam_role.instance` + SSM policy | instance profile | shell access via SSM, so no key to manage |
 | `aws_s3_bucket.backup` + a role for ClickHouse to assume | `stride-lite-backup-<account-id>` | the restorable copy of the database, so a fresh instance fills itself in an hour. `prevent_destroy`, for the same reason the data volume has it |
 | `aws_acm_certificate.api`, when `api_domain` is set | a certificate in us-east-1 | CloudFront reads certificates from there and nowhere else |
-| `infra/bootstrap.sh` as `user_data` | installs ClickHouse, Node, the schema, the crons, and starts the first load | a launched instance serves the API, and fills itself, with no further steps |
+| `deploy/aws/bootstrap.sh` as `user_data` | installs ClickHouse, Node, the schema, the crons, and starts the first load | a launched instance serves the API, and fills itself, with no further steps |
 | `aws_budgets_budget.monthly` | alerts at 50/80/100% of `budget_usd` | the only unrecoverable failure here is spend |
 
 ```bash
-cd infra
+cd deploy/aws
 terraform init
 terraform apply -var budget_email=you@example.org
 ```
@@ -484,16 +484,16 @@ CloudFront, which is a second cache, a second TLS termination and a second place
 The apply **blocks** until the validation record exists — `aws_acm_certificate_validation` with
 a 60-minute timeout. That is the intended shape: the alternative is an apply that succeeds and
 a distribution serving a certificate for a name nobody can resolve. The health check in
-`deploy.yml` uses `api_origin_url` and not `api_url` for the same reason — whether somebody
+`aws-deploy.yml` uses `api_origin_url` and not `api_url` for the same reason — whether somebody
 else has added a DNS record is not a condition of our deploy succeeding.
 
 ### Deploying from CI, and what has to exist first
 
-`.github/workflows/deploy.yml` runs on every push to `main`. It does two things, because they
+`.github/workflows/aws-deploy.yml` runs on every push to `main`. It does two things, because they
 are two things and only the first is Terraform's:
 
 1. `terraform plan` and `terraform apply`, which converges the AWS resources above.
-2. `scripts/deploy.sh` on the instance, sent over SSM, which is what actually puts new code
+2. `deploy/aws/bin/deploy.sh` on the instance, sent over SSM, which is what actually puts new code
    there.
 
 The second step is not redundant. `bootstrap.sh` is `user_data`, so it runs once per instance
@@ -509,7 +509,7 @@ because they are account-specific:
 | --- | --- |
 | An S3 bucket named `stride-lite-tfstate-<account-id>` | Terraform state. With local state every CI run starts from nothing and tries to create what exists |
 | GitHub as an OIDC identity provider in the account | One entry, shared by anything this account ever trusts GitHub for |
-| A role trusting `infra/github-oidc-trust.json`, carrying `infra/deployer-policy.json` | What CI becomes. There is no access key, here or in the repository settings |
+| A role trusting `deploy/aws/github-oidc-trust.json`, carrying `deploy/aws/deployer-policy.json` | What CI becomes. There is no access key, here or in the repository settings |
 | Variables `TF_STATE_BUCKET` and `AWS_ROLE_ARN` | Repository **variables**, not secrets: the workflow gates on both, so a value put in secrets leaves the job skipping silently. `AWS_REGION` is optional — unset, the workflow uses `us-east-1` |
 
 **There are no secrets to set.** The job presents the token GitHub mints for it and gets
@@ -540,12 +540,12 @@ aws iam create-open-id-connect-provider \
   --url https://token.actions.githubusercontent.com \
   --client-id-list sts.amazonaws.com
 
-sed "s|\${ACCOUNT}|$ACCOUNT|" infra/github-oidc-trust.json > /tmp/trust.json
+sed "s|\${ACCOUNT}|$ACCOUNT|" deploy/aws/github-oidc-trust.json > /tmp/trust.json
 aws iam create-role --role-name GitHubActionsStrideLiteDeployer \
   --assume-role-policy-document file:///tmp/trust.json
 aws iam put-role-policy --role-name GitHubActionsStrideLiteDeployer \
   --policy-name StrideLiteTerraformDeployer \
-  --policy-document file://infra/deployer-policy.json
+  --policy-document file://deploy/aws/deployer-policy.json
 
 aws iam get-role --role-name GitHubActionsStrideLiteDeployer \
   --query Role.Arn --output text   # this is the AWS_ROLE_ARN variable
@@ -611,7 +611,7 @@ first load is `./up.sh`, not a catch-up"), because it walks forward from the new
 actually loaded and there was none. Nothing loaded history. A deploy produced an API that
 answered every query with an empty list.
 
-`infra/bootstrap.sh` now ends by starting `stride-first-load.service`, a `oneshot` unit that
+`deploy/aws/bootstrap.sh` now ends by starting `stride-first-load.service`, a `oneshot` unit that
 runs [`scripts/first-load.sh`](../scripts/first-load.sh) once. Five stages, each skipped when
 the state file on the data volume says it finished:
 
@@ -634,7 +634,7 @@ timeout is 90 seconds and this job is measured in hours.
 
 **It does not run alongside the ingest.** The unit takes `/var/lock/stride-catchup`, the lock the
 hourly `catchup.sh` cron already uses with `flock -n`, so a tick during a first load does not
-run rather than queueing behind it. `scripts/deploy.sh` takes the same lock with a ten-minute
+run rather than queueing behind it. `deploy/aws/bin/deploy.sh` takes the same lock with a ten-minute
 wait and, if it cannot get it, updates the code and leaves the schema to the next deploy.
 
 **The live chain is installed after the history, not before.** The dump carries its own `id`
@@ -702,7 +702,7 @@ The project is open and so is this repository, and most of what an operator woul
 can be public. One thing cannot, and it is the one that is tempting.
 
 **Already public, because the repository is:** every measurement and finding in `docs/`, the
-cost model (it is derived from AWS's published price list, not from a bill), `infra/` including
+cost model (it is derived from AWS's published price list, not from a bill), `deploy/aws/` including
 `bootstrap.sh`, and the Actions logs of every run. The API itself is meant to be public — it
 serves ministry data that is already public — and so is the data.
 
@@ -715,7 +715,7 @@ serves ministry data that is already public — and so is the data.
 | `GET /coverage` — per-day data health from `ingest_day_health`: `day`, `snapshots`, `vehicle_locations`, `duplicate_ids`, `rides`, `rides_with_duration`, `rides_linked_to_gtfs`, `measured_at`, newest day first, `?limit=` defaulting to 90 and capped at 10,000 | Public for the same reason, and it answers the question production cannot. Finding 13 is twenty months of "zero buses ran" that reads as data rather than as an outage, because `/gtfs_rides_agg/group_by` returns 0 either way. Here a day says how many snapshots arrived, how many rows were derived from them, and whether its ids are sound — so "nothing ran", "nothing arrived" and "we broke it" are three different rows and not one |
 | `GET /ops/metrics` — disk free, table sizes, mutations and running merges (a projection being built counts down here), refresh history, ClickHouse errors of the last day, memory and load, and the API's own request count and p50/p95 latency per endpoint over the last hour, plus the five commonest paths that are not endpoints (scanners, typos), cut to 80 characters and redacted, with the rest as one `other` row. Cached 15 s | Public so that anyone can watch the node and help. It reads no table that records a client address, and the request counts keep the path and nothing about the requester |
 | `GET /ops/logs` — the tail of `first-load`, `catchup`, `gtfs`, `clickhouse` and the API journal; `?source=` picks one, `?lines=` defaults to 200 and is capped at 2,000. Cached 15 s | A fixed list, no path parameter. None of these is a request log, and none may become one: that is what keeps visitors' addresses out. IPv4/IPv6 addresses and the AWS account id are redacted from every line as a second line of defence |
-| `infra/rates.json` and `scripts/measure-cost.py` | Public rates and a script. An estimate nobody can re-derive is one nobody should act on |
+| `deploy/aws/rates.json` and `deploy/aws/bin/measure-cost.py` | Public rates and a script. An estimate nobody can re-derive is one nobody should act on |
 
 **The state bucket stays private, and the honest reason is not secrets.** This configuration
 creates nothing that generates a credential — no database password, no access key, no
@@ -834,7 +834,7 @@ no distributed tables, no cluster configuration and no replication to operate.
 
 This paragraph used to add "and it lifts the 4 GiB ceiling that an unfiltered
 `/siri_rides/list` hits". That measurement was taken against a 4 GiB cap, and the local cap is
-now 8 GiB (`ingest/local.xml`), chosen to match the `t4g.large` this module actually deploys —
+now 8 GiB (`deploy/local/local.xml`), chosen to match the `t4g.large` this module actually deploys —
 so the old figure measured a box stricter than the target and says nothing about this one.
 **Whether 8 GiB is enough for that call is not measured.** Re-measuring it means running an
 unfiltered three-way join on the shared database that the ingest and enrichment chains are

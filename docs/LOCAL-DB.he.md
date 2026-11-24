@@ -203,7 +203,7 @@ npx vitest run tests/differential.test.ts # משווה מול ה-API החי של
 
 ## לשמור על המכונה שלכם שמישה
 
-`up.sh` כבר מריץ את ClickHouse תחת התקרות שב-`ingest/local.xml` ו-`ingest/local-users.xml`,
+`up.sh` כבר מריץ את ClickHouse תחת התקרות שב-`deploy/local/local.xml` ו-`deploy/local/local-users.xml`,
 ולכן אין צורך לעשות כלום אם משתמשים בו. מה שלמטה הוא ההסבר למה הן שם, ומה לעשות בטעינה ידנית.
 
 הטעינה המלאה היא עבודה חסומת-I/O שתפיל תחנת עבודה אם נותנים לה. מה שעבד, אחרי ניסיון ראשון

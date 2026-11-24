@@ -1,0 +1,13 @@
+[Unit]
+Description=Naim BaSofash GTFS-RT: Tel Aviv's weekend lines' vehicle positions, to S3
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/stride-lite/node.env
+Environment=ARCHIVE_BUCKET=openbus-mot-archive
+StateDirectory=naim-rt-request
+ExecStart=/opt/stride-lite/scripts/naim-rt-request.sh
+# A run still going when the next one is due is hung; this ends it.
+TimeoutStartSec=9

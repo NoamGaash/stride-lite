@@ -148,8 +148,8 @@ jobs:
 
       # ingest/enrich-once.sql ends by writing ingest_day_health from
       # ingest_day_health_src, which this file creates, so the step below that
-      # runs enrich-once fails with UNKNOWN_FUNCTION without it. infra/bootstrap.sh
-      # installs it through scripts/first-load.sh and scripts/deploy.sh applies it
+      # runs enrich-once fails with UNKNOWN_FUNCTION without it. deploy/aws/bootstrap.sh
+      # installs it through scripts/first-load.sh and deploy/aws/bin/deploy.sh applies it
       # on every deploy, so a CI that skips it is testing a chain nothing deploys.
       - name: Apply the per-day health table and its refresh
         run: ./clickhouse client --database stride --multiquery < ingest/health.sql
@@ -299,7 +299,7 @@ jobs:
           sudo cp -r "$GITHUB_WORKSPACE" /opt/stride-lite
           sudo DATA_DEVICE="$dev" START_FIRST_LOAD=0 BRANCH="$BRANCH" \
             AWS_ACCESS_KEY_ID=AKIABOOTSTRAPTEST001 AWS_SECRET_ACCESS_KEY=bootstrap-test-secret \
-            bash scripts/bootstrap-node.sh 2>&1 | tee "$RUNNER_TEMP/bootstrap.log"
+            bash deploy/aws/bin/bootstrap-node.sh 2>&1 | tee "$RUNNER_TEMP/bootstrap.log"
       - name: The node is up
         run: |
           systemctl is-active clickhouse stride-api cron
@@ -322,7 +322,7 @@ jobs:
       - name: The timer's deploy brings the node to the branch's head
         # The bootstrap recorded the checkout as deployed. On a pull request that is
         # the merge commit, but on a push it is the branch's head itself, so forget
-        # it: either way the run below is then a real scripts/deploy.sh.
+        # it: either way the run below is then a real deploy/aws/bin/deploy.sh.
         env:
           BRANCH: ${{ github.head_ref || github.ref_name }}
         run: |
@@ -335,11 +335,53 @@ jobs:
           sudo journalctl -u stride-deploy --no-pager | tail -5
           test "$(sudo journalctl -u stride-deploy --no-pager | grep -c 'deploying ')" = 1
 
+  upgrade-from-main:
+    # The deploy that crosses a change in the repository's layout: a node
+    # bootstrapped from main, then brought to this branch by its own timer, the
+    # way the running node will be. A path that main's units, cron entries or
+    # auto-deploy.sh still call and this branch no longer has fails here.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.base_ref }}
+      - name: Bootstrap from main
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          set -o pipefail
+          truncate -s 4G "$RUNNER_TEMP/data.img"
+          dev=$(sudo losetup --find --show "$RUNNER_TEMP/data.img")
+          sudo cp -r "$GITHUB_WORKSPACE" /opt/stride-lite
+          boot=deploy/aws/bin/bootstrap-node.sh
+          [ -f "$boot" ] || boot=scripts/bootstrap-node.sh
+          sudo DATA_DEVICE="$dev" START_FIRST_LOAD=0 BRANCH="$BRANCH" \
+            AWS_ACCESS_KEY_ID=AKIABOOTSTRAPTEST001 AWS_SECRET_ACCESS_KEY=bootstrap-test-secret \
+            bash "$boot"
+          for _ in $(seq 30); do curl -fsS http://127.0.0.1/healthz && break; sleep 2; done
+      - name: The timer deploys this branch over it
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          echo none | sudo tee /var/lib/stride-deploy/deployed
+          sudo systemctl start stride-deploy.service || { sudo journalctl -u stride-deploy --no-pager | tail -40; exit 1; }
+          head=$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)
+          test "$(sudo cat /var/lib/stride-deploy/deployed)" = "$head"
+          systemctl is-active clickhouse stride-api stride-deploy.timer
+          curl -fsS http://127.0.0.1/healthz
+          # Every unit and cron entry now names a path that exists.
+          for f in /etc/systemd/system/stride-*.service /etc/systemd/system/siri-requester.service /etc/cron.d/stride-*; do
+            for p in $(grep -oE "/opt/stride-lite/[^ ;\"']+" "$f"); do
+              test -e "$p" || { echo "$f names $p, which does not exist"; exit 1; }
+            done
+          done
+
   terraform:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: infra
+        working-directory: deploy/aws
     steps:
       - uses: actions/checkout@v4
       - uses: hashicorp/setup-terraform@v3
@@ -352,25 +394,28 @@ jobs:
       # silently missing until an apply fails on it.
       - name: Expect every IAM action in the deployer policy to exist
         working-directory: .
-        run: python3 scripts/check-iam-actions.py infra/deployer-policy.json infra/github-oidc-trust.json
+        run: python3 deploy/aws/bin/check-iam-actions.py deploy/aws/deployer-policy.json deploy/aws/github-oidc-trust.json
       - name: Node config follows the repository on every deploy
         working-directory: .
-        run: tests/install-node-config.sh
+        run: deploy/aws/tests/install-node-config.sh
       - name: The timer deploys main when it moves, once, and retries a failure
         working-directory: .
-        run: tests/auto-deploy.sh
+        run: deploy/aws/tests/auto-deploy.sh
       - name: A deploy waits for the ClickHouse it restarted before querying it
         working-directory: .
         run: tests/wait-for-clickhouse.sh
       - name: The SIRI requester stores a valid snapshot, falls back, and retries uploads
         working-directory: .
-        run: tests/siri-request.sh
+        run: deploy/aws/tests/siri-request.sh
       - name: The GTFS archive keeps each feed, the Ministry's and Tel Aviv's, and retries what failed
         working-directory: .
         run: tests/gtfs-archive.sh
       - name: The Naim BaSofash requester keeps snapshots with vehicles, and retries uploads
         working-directory: .
         run: tests/naim-rt-request.sh
+      - name: Nothing particular to one environment outside deploy/
+        working-directory: .
+        run: tests/boundary.sh
 
   differential:
     # Compares endpoints against the live production API, which is a non-profit's

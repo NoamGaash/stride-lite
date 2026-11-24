@@ -10,7 +10,7 @@
 # This is deliberately polite about the machine it runs on: ClickHouse is
 # started with a memory ceiling, I/O bandwidth limits, a merge-size cap and six
 # of the available cores, because the reference machine for this project is
-# somebody's workstation and not a server. See ingest/local.xml. On a dedicated
+# somebody's workstation and not a server. See deploy/local/local.xml. On a dedicated
 # box, delete that file or raise the numbers.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -38,8 +38,8 @@ if curl -sf "$CH_HTTP/ping" >/dev/null 2>&1; then
   echo "already listening on $CH_HTTP"
 else
   mkdir -p "$STATE"
-  sed -e "s|__STATE__|$STATE|g" -e "s|__TCP_PORT__|$CH_TCP_PORT|" -e "s|__HTTP_PORT__|$CH_HTTP_PORT|" ingest/local.xml > "$STATE/config.xml"
-  cp ingest/local-users.xml "$STATE/users.xml"
+  sed -e "s|__STATE__|$STATE|g" -e "s|__TCP_PORT__|$CH_TCP_PORT|" -e "s|__HTTP_PORT__|$CH_HTTP_PORT|" deploy/local/local.xml > "$STATE/config.xml"
+  cp deploy/local/local-users.xml "$STATE/users.xml"
   ./clickhouse server --config-file="$STATE/config.xml" --daemon
   for _ in $(seq 60); do curl -sf "$CH_HTTP/ping" >/dev/null 2>&1 && break; sleep 1; done
   curl -sf "$CH_HTTP/ping" >/dev/null || { echo "server did not come up; see $STATE/ch.err.log" >&2; exit 1; }
