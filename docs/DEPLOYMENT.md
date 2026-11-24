@@ -583,6 +583,15 @@ cancels an older run still waiting, so an unreviewed commit never holds the queu
 `deploy` job after it is never cancelled once it starts, and a newer approved commit
 replaces one that is only pending behind it.
 
+After a deploy, or any change to the node, `scripts/check-production.sh` checks the running
+service from the outside:
+- SIRI is fresh, and today's GTFS is loaded;
+- no refreshable view is failing, and there has been no `MEMORY_LIMIT_EXCEEDED` in the last day;
+- the differential suite matches production.
+
+It also lists the endpoints that failed in the last hour. `SKIP_DIFF=1` drops the two-minute
+comparison.
+
 The policy is scoped where scoping means something: state access is the one bucket and one
 prefix, IAM is `stride-lite-*` only, EC2 is conditioned on the region, and `ssm:SendCommand`
 is conditioned on `Project=stride-lite` so these credentials cannot run a command on any other
