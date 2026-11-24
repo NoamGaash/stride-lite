@@ -138,7 +138,7 @@ jobs:
             --document-name AWS-RunShellScript \
             --comment "deploy ${GITHUB_SHA::7}" \
             --timeout-seconds 3600 \
-            --parameters commands='["for _ in $(seq 1 120); do [ -f /var/log/stride-bootstrap.done ] && break; sleep 10; done; test -f /var/log/stride-bootstrap.done || { echo \"bootstrap never finished\" >&2; exit 1; }; BRANCH=main /opt/stride-lite/scripts/deploy.sh"]' \
+            --parameters commands='["for _ in $(seq 1 120); do [ -f /var/log/stride-bootstrap.done ] && break; sleep 10; done; test -f /var/log/stride-bootstrap.done || { echo \"bootstrap never finished\" >&2; exit 1; }; BRANCH=main /opt/stride-lite/deploy/aws/bin/deploy.sh"]' \
             --query 'Command.CommandId' --output text)
           echo "id=$id" >> "$GITHUB_OUTPUT"
 
