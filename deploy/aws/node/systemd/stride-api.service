@@ -1,16 +1,20 @@
 [Unit]
-Description=stride-lite API
-After=clickhouse.service
+Description=stride-lite API, from the image pull-image.sh pulled
+After=clickhouse.service docker.service
+Requires=docker.service
 [Service]
-WorkingDirectory=/opt/stride-lite/api
-Environment=CH_DB=stride
-Environment=CH_URL=http://127.0.0.1:8123
-Environment=PORT=80
-Environment=NODE_ENV=production
-Environment=STATS_FILE=/var/lib/stride-api/requests.json
+EnvironmentFile=/etc/stride-lite/image.env
 StateDirectory=stride-api
-ExecStart=/usr/bin/npx tsx src/server.ts
+ExecStartPre=-/usr/bin/docker rm -f stride-api
+# Host network: ClickHouse listens on 127.0.0.1 only. Root, as this unit always
+# ran the API: port 80, and the logs /ops/logs reads, read-only.
+ExecStart=/usr/bin/docker run --rm --name stride-api --network host --user root \
+  -e CH_DB=stride -e CH_URL=http://127.0.0.1:8123 -e PORT=80 \
+  -e STATS_FILE=/var/lib/stride-api/requests.json \
+  -v /var/lib/stride-api:/var/lib/stride-api \
+  -v /var/log:/var/log:ro -v /etc/machine-id:/etc/machine-id:ro \
+  ${STRIDE_IMAGE}
+ExecStop=/usr/bin/docker stop -t 30 stride-api
 Restart=always
-AmbientCapabilities=CAP_NET_BIND_SERVICE
 [Install]
 WantedBy=multi-user.target

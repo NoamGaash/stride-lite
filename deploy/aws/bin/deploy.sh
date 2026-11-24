@@ -25,9 +25,6 @@ cd "$REPO"
 git fetch --depth 1 origin "$BRANCH"
 git reset --hard FETCH_HEAD
 
-# Node first: npm ci builds against it.
-./deploy/aws/bin/ensure-node.sh
-(cd api && npm ci --omit=dev)
 # deploy/aws/bin/siri-request.sh compresses with it; bootstrap installs it on a new node.
 command -v brotli >/dev/null || { command -v dnf >/dev/null && dnf install -y brotli || apt-get install -y brotli; }
 RESTART_CHANGED=1 ./deploy/aws/bin/install-node-config.sh

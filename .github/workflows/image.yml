@@ -2,7 +2,7 @@ name: image
 
 # Builds the image every environment that runs ClickHouse elsewhere uses
 # (deploy/hasadna/), checks it against a real ClickHouse, and on main publishes
-# it as ghcr.io/<owner>/<repo>:<sha>. If HASADNA_K8S_DEPLOY_KEY is set, it then
+# it as ghcr.io/<owner>/<repo>:<sha>, for amd64 and arm64. If HASADNA_K8S_DEPLOY_KEY is set, it then
 # points hasadna-k8s at the new tag, the way Hasadna's other projects do; without
 # it, that step is skipped, so a fork builds and publishes all the same.
 on:
@@ -59,6 +59,11 @@ jobs:
           test "$(curl -fsS 'http://127.0.0.1:8080/gtfs_agencies/list?limit=1')" = '[]' \
             || { docker logs api; exit 1; }
 
+      # Both architectures: Hasadna's cluster is amd64, the AWS node is Graviton.
+      - uses: docker/setup-qemu-action@v3
+        if: env.PUBLISH == 'true'
+      - uses: docker/setup-buildx-action@v3
+        if: env.PUBLISH == 'true'
       - name: Publish
         if: env.PUBLISH == 'true'
         env:
@@ -66,10 +71,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          docker tag app "$IMAGE:$GITHUB_SHA"
-          docker tag app "$IMAGE:latest"
-          docker push "$IMAGE:$GITHUB_SHA"
-          docker push "$IMAGE:latest"
+          docker buildx build --platform linux/amd64,linux/arm64 --push \
+            -t "$IMAGE:$GITHUB_SHA" -t "$IMAGE:latest" .
 
       - name: Point hasadna-k8s at the new image
         if: env.PUBLISH == 'true' && env.HAS_K8S_KEY == 'true'
@@ -88,3 +91,15 @@ jobs:
           git add apps/openbus/values-hasadna-auto-updated.yaml
           git commit -m "automatic update of stride-lite"
           git push origin HEAD
+
+  arm64:
+    # The AWS node's architecture, built natively, so a dependency without an
+    # arm64 build fails here and not on the node's next deploy.
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t app .
+      - run: |
+          docker run --rm app node --version
+          docker run --rm app clickhouse client --version
+          docker run --rm app journalctl --version | head -1

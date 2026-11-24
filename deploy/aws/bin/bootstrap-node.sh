@@ -78,8 +78,6 @@ install -d -o clickhouse -g clickhouse /etc/clickhouse-server /var/log/clickhous
 # ---- the repository --------------------------------------------------------
 [ -d "$REPO/.git" ] || git clone --branch "$BRANCH" --depth 1 https://github.com/NoamGaash/stride-lite "$REPO"
 cd "$REPO"
-./deploy/aws/bin/ensure-node.sh
-(cd api && npm ci --omit=dev)
 
 # What only this node knows, for the units in deploy/aws/node to read. Everything
 # else on the node — ClickHouse's config, the units, the cron entries — comes
