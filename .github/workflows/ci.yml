@@ -354,7 +354,8 @@ jobs:
           truncate -s 4G "$RUNNER_TEMP/data.img"
           dev=$(sudo losetup --find --show "$RUNNER_TEMP/data.img")
           sudo cp -r "$GITHUB_WORKSPACE" /opt/stride-lite
-          boot=$(ls deploy/aws/bin/bootstrap-node.sh scripts/bootstrap-node.sh 2>/dev/null | head -1)
+          boot=deploy/aws/bin/bootstrap-node.sh
+          [ -f "$boot" ] || boot=scripts/bootstrap-node.sh
           sudo DATA_DEVICE="$dev" START_FIRST_LOAD=0 BRANCH="$BRANCH" \
             AWS_ACCESS_KEY_ID=AKIABOOTSTRAPTEST001 AWS_SECRET_ACCESS_KEY=bootstrap-test-secret \
             bash "$boot"
