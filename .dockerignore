@@ -1,0 +1,9 @@
+*
+!api/package.json
+!api/package-lock.json
+!api/src
+!api/openapi.json
+!api/tsconfig.json
+!db
+!ingest
+!scripts

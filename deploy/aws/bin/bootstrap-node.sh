@@ -41,14 +41,14 @@ mount -a
 if command -v dnf >/dev/null; then
   dnf install -y git tar zstd unzip cronie brotli
   systemctl enable --now crond
-  curl -fsSL https://rpm.nodesource.com/setup_22.x | bash -
+  curl -fsSL https://rpm.nodesource.com/setup_26.x | bash -
   dnf install -y nodejs
 else
   export DEBIAN_FRONTEND=noninteractive
   apt-get update
   apt-get install -y git tar zstd unzip cron curl ca-certificates brotli
   systemctl enable --now cron
-  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  curl -fsSL https://deb.nodesource.com/setup_26.x | bash -
   apt-get install -y nodejs
 fi
 
