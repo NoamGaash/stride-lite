@@ -354,6 +354,9 @@ jobs:
       - name: The timer deploys main when it moves, once, and retries a failure
         working-directory: .
         run: tests/auto-deploy.sh
+      - name: A deploy waits for the ClickHouse it restarted before querying it
+        working-directory: .
+        run: tests/wait-for-clickhouse.sh
       - name: The SIRI requester stores a valid snapshot, falls back, and retries uploads
         working-directory: .
         run: tests/siri-request.sh
