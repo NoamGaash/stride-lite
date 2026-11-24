@@ -1,0 +1,90 @@
+name: image
+
+# Builds the image every environment that runs ClickHouse elsewhere uses
+# (deploy/hasadna/), checks it against a real ClickHouse, and on main publishes
+# it as ghcr.io/<owner>/<repo>:<sha>. If HASADNA_K8S_DEPLOY_KEY is set, it then
+# points hasadna-k8s at the new tag, the way Hasadna's other projects do; without
+# it, that step is skipped, so a fork builds and publishes all the same.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:26.10
+        env:
+          CLICKHOUSE_USER: stride
+          CLICKHOUSE_PASSWORD: ci
+        ports:
+          - 8123:8123
+          - 9000:9000
+    env:
+      PUBLISH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+      HAS_K8S_KEY: ${{ secrets.HASADNA_K8S_DEPLOY_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Name
+        id: name
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - name: Build
+        run: docker build -t app .
+
+      - name: The image applies the schema to a ClickHouse it reaches over the network
+        run: |
+          for _ in $(seq 30); do curl -fsS http://127.0.0.1:8123/ping && break; sleep 2; done
+          docker run --rm --network host \
+            -e CH_CLIENT="clickhouse client --host 127.0.0.1 --user stride --password ci" \
+            -e PROJECTIONS=0 app ../scripts/apply-schema.sh
+          n=$(curl -fsS -u stride:ci 'http://127.0.0.1:8123/?query=SELECT+count()+FROM+system.tables+WHERE+database=%27stride%27')
+          test "$n" -ge 20 || { echo "got $n tables"; exit 1; }
+      - name: The image serves the API from it
+        run: |
+          docker run -d --name api --network host \
+            -e CH_URL=http://127.0.0.1:8123 -e CH_USER=stride -e CH_PASSWORD=ci app
+          for _ in $(seq 30); do curl -fsS http://127.0.0.1:8080/healthz && break; sleep 2; done
+          curl -fsS http://127.0.0.1:8080/healthz
+          test "$(curl -fsS 'http://127.0.0.1:8080/gtfs_agencies/list?limit=1')" = '[]' \
+            || { docker logs api; exit 1; }
+
+      - name: Publish
+        if: env.PUBLISH == 'true'
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag app "$IMAGE:$GITHUB_SHA"
+          docker tag app "$IMAGE:latest"
+          docker push "$IMAGE:$GITHUB_SHA"
+          docker push "$IMAGE:latest"
+
+      - name: Point hasadna-k8s at the new image
+        if: env.PUBLISH == 'true' && env.HAS_K8S_KEY == 'true'
+        env:
+          IMAGE: ${{ steps.name.outputs.image }}
+          HASADNA_K8S_DEPLOY_KEY: ${{ secrets.HASADNA_K8S_DEPLOY_KEY }}
+        run: |
+          cd "$(mktemp -d)"
+          echo "$HASADNA_K8S_DEPLOY_KEY" > key && chmod 400 key
+          export GIT_SSH_COMMAND="ssh -i $PWD/key -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no"
+          git clone --depth 1 git@github.com:hasadna/hasadna-k8s.git
+          cd hasadna-k8s
+          python3 update_yaml.py '{"strideLiteImage":"'"$IMAGE:$GITHUB_SHA"'"}' apps/openbus/values-hasadna-auto-updated.yaml
+          git config user.name "stride-lite CI"
+          git config user.email "stride-lite-ci@localhost"
+          git add apps/openbus/values-hasadna-auto-updated.yaml
+          git commit -m "automatic update of stride-lite"
+          git push origin HEAD
