@@ -29,7 +29,9 @@ git reset --hard FETCH_HEAD
 # bootstrap-node.sh name the same one. A node bootstrapped with an older one is
 # moved here, before npm ci builds against it.
 NODE_MAJOR=26
-node_major() { node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true; }
+# /usr/bin/node, where the package installs it and what stride-api.service runs,
+# not whichever node comes first on PATH.
+node_major() { /usr/bin/node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true; }
 if [ "$(node_major)" != "$NODE_MAJOR" ]; then
   if command -v dnf >/dev/null; then
     curl -fsSL "https://rpm.nodesource.com/setup_$NODE_MAJOR.x" | bash -
