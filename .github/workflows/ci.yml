@@ -413,6 +413,9 @@ jobs:
       - name: Node config follows the repository on every deploy
         working-directory: .
         run: deploy/aws/tests/install-node-config.sh
+      - name: The API's image is named for the unit, on a host with no /etc/stride-lite yet
+        working-directory: .
+        run: deploy/aws/tests/pull-image.sh
       - name: The timer deploys main when it moves, once, and retries a failure
         working-directory: .
         run: deploy/aws/tests/auto-deploy.sh

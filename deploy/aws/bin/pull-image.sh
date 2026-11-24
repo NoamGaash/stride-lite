@@ -10,4 +10,5 @@ image=ghcr.io/$repo:$(git rev-parse HEAD)
 command -v docker >/dev/null || dnf install -y docker || apt-get install -y docker.io
 systemctl enable --now docker
 docker image inspect "$image" >/dev/null 2>&1 || docker pull -q "$image"
+install -d "${NODE_ROOT:-}/etc/stride-lite"
 echo "STRIDE_IMAGE=$image" > "${NODE_ROOT:-}/etc/stride-lite/image.env"
