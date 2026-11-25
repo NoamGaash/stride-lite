@@ -66,7 +66,7 @@ fi
 if [ "${SKIP_DIFF:-0}" = 1 ]; then
   echo "SKIP  differential suite"
 else
-  out=$(cd api && { [ -d node_modules ] || npm ci --silent; } && LOCAL_API=$API npx vitest run tests/differential.test.ts 2>&1)
+  out=$(cd api && { [ -d node_modules ] || npm ci --silent; } && LOCAL_API=$API npx vitest run tests/differential.test.ts tests/durations.test.ts 2>&1)
   rc=$?
   echo "$out" | grep -E '[✓×] |Tests ' | sed -E 's/^ *//; s/^✓/PASS /; s/^×/FAIL /'
   [ "$rc" = 0 ] || failed=1

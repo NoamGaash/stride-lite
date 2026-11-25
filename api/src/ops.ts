@@ -28,7 +28,7 @@ export const LOG_SOURCES: Record<string, Source> = {
   'first-load': { file: '/var/log/stride-first-load.log' },
   catchup: { file: '/var/log/stride-catchup.log' },
   gtfs: { file: '/var/log/stride-gtfs.log' },
-  deploy: { unit: 'stride-deploy' },
+  deploy: { file: '/var/log/stride-deploy.log' },
   clickhouse: { file: '/var/log/clickhouse-server/clickhouse.log' },
   api: { unit: 'stride-api' },
   requester: { unit: 'siri-requester' },
@@ -36,7 +36,7 @@ export const LOG_SOURCES: Record<string, Source> = {
   'naim-rt': { unit: 'naim-rt-request' },
 }
 
-export const DEFAULT_LINES = 200
+const DEFAULT_LINES = 200
 export const MAX_LINES = 2000
 /** A tail reads at most this much of a file, however many lines are asked for. */
 const MAX_TAIL_BYTES = 1 << 20
@@ -127,7 +127,7 @@ export async function readLogs(
   return Object.fromEntries(entries)
 }
 
-export type MemoryPressure = {
+type MemoryPressure = {
   some_stalled_seconds: number
   full_stalled_seconds: number
   some_avg300_percent: number
@@ -153,7 +153,7 @@ export function parseMemoryPressure(text: string): MemoryPressure | undefined {
 }
 
 /** Columns whose text comes from outside our own SQL, and so goes through redact. */
-export const FREE_TEXT = new Set([
+const FREE_TEXT = new Set([
   'exception',
   'last_error_message',
   'latest_fail_reason',
@@ -301,12 +301,12 @@ type Row = {
 const MINUTE_MS = 60_000
 const HOUR_MS = 60 * MINUTE_MS
 /** Each window, and the width of the buckets it is charted in. */
-export const WINDOWS = {
+const WINDOWS = {
   hour: { ms: HOUR_MS, bucketMs: 5 * MINUTE_MS },
   day: { ms: 24 * HOUR_MS, bucketMs: HOUR_MS },
   week: { ms: 7 * 24 * HOUR_MS, bucketMs: HOUR_MS },
 } as const
-export type Window = keyof typeof WINDOWS
+type Window = keyof typeof WINDOWS
 const MAX_SAMPLES = 500_000
 /** How many paths that are not endpoints are named; the rest fold into "other". */
 const NAMED_OTHER_PATHS = 5

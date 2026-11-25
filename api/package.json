@@ -5,7 +5,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "start": "tsx src/server.ts",
-    "test": "vitest run"
+    "test": "vitest run --exclude tests/differential.test.ts --exclude tests/durations.test.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

@@ -202,7 +202,7 @@ curl 'http://127.0.0.1:8080/siri_routes/list?limit=2'
 ```
 
 ```bash
-npm test                                  # unit tests on SQL generation, no DB needed
+npm test                                  # the unit tests, no DB needed
 npx vitest run tests/differential.test.ts # compares against the live production API
 ```
 

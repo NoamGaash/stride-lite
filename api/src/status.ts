@@ -41,7 +41,7 @@ export function statusSql(db: string): string {
 }
 
 /** Everything /coverage promises, in order. */
-export const COVERAGE_FIELDS = [
+const COVERAGE_FIELDS = [
   'day',
   'snapshots',
   'empty_snapshots',

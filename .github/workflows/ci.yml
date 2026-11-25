@@ -4,10 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  schedule:
-    # Drift between this API and production is what actually breaks a migration
-    # that runs for weeks, and a single PR never reveals it. Hence nightly.
-    - cron: '17 2 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -29,7 +25,7 @@ jobs:
           cache-dependency-path: api/package-lock.json
       - run: npm ci
       - run: npm run typecheck
-      - run: npx vitest run tests/sql.test.ts tests/registry.test.ts tests/status.test.ts tests/ops.test.ts tests/ch.test.ts tests/openapi.test.ts tests/statsFile.test.ts tests/cache.test.ts
+      - run: npm test
 
   api-e2e:
     # The API against a real database: tests/api/fixture.sh loads one hour of
@@ -289,15 +285,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # What CI publishes on main, built here for the commits this job deploys:
-      # the checkout, and the branch head the timer moves to.
+      # What CI publishes on main, built here for the commit this job deploys.
       - name: The image, as pull-image.sh will look for it
-        env:
-          BRANCH: ${{ github.head_ref || github.ref_name }}
-        run: |
-          image=ghcr.io/${GITHUB_REPOSITORY,,}
-          docker build -t "$image:$(git rev-parse HEAD)" .
-          docker tag "$image:$(git rev-parse HEAD)" "$image:$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)"
+        run: docker build -t "ghcr.io/${GITHUB_REPOSITORY,,}:$(git rev-parse HEAD)" .
       - name: Bootstrap
         env:
           BRANCH: ${{ github.head_ref || github.ref_name }}
@@ -321,46 +311,38 @@ jobs:
           if grep -q bootstrap-test-secret "$RUNNER_TEMP/bootstrap.log"; then
             echo "the secret is in the bootstrap log"; exit 1
           fi
-          systemctl is-active stride-deploy.timer
-          systemctl is-active siri-requester.timer
           systemctl is-active gtfs-archive.timer
           systemctl is-active naim-rt-request.timer
-          # No Ministry key here, so a run is skipped rather than failed.
-          sudo systemctl start siri-requester
-          if systemctl is-failed --quiet siri-requester; then echo "a run with no key failed instead of being skipped"; exit 1; fi
-      - name: The timer's deploy brings the node to the branch's head
-        # The bootstrap recorded the checkout as deployed. On a pull request that is
-        # the merge commit, but on a push it is the branch's head itself, so forget
-        # it: either way the run below is then a real deploy/aws/bin/deploy.sh.
-        env:
-          BRANCH: ${{ github.head_ref || github.ref_name }}
+          # No Ministry key here, so the requester has nothing to ask with and stays off.
+          if systemctl is-active --quiet siri-requester.timer; then echo "the requester runs with no key"; exit 1; fi
+      - name: A deploy brings the node to a commit, the way the deploy workflow sends it
         run: |
-          echo none | sudo tee /var/lib/stride-deploy/deployed
-          sudo systemctl start stride-deploy.service || { sudo journalctl -u stride-deploy --no-pager | tail -40; exit 1; }
-          head=$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)
-          test "$(sudo cat /var/lib/stride-deploy/deployed)" = "$head"
+          head=$(git rev-parse HEAD)
+          sudo COMMIT="$head" /opt/stride-lite/deploy/aws/bin/deploy.sh
+          test "$(sudo git -C /opt/stride-lite rev-parse HEAD)" = "$head"
           curl -fsS http://127.0.0.1/healthz
-          sudo systemctl start stride-deploy.service
-          sudo journalctl -u stride-deploy --no-pager | tail -5
-          test "$(sudo journalctl -u stride-deploy --no-pager | grep -c 'deploying ')" = 1
+          sudo grep -q 'install-node-config.sh' /var/log/stride-deploy.log
 
   upgrade-from-main:
-    # The deploy that crosses a change in the repository's layout: a node
-    # bootstrapped from main, then brought to this branch by its own timer, the
-    # way the running node will be. A path that main's units, cron entries or
-    # auto-deploy.sh still call and this branch no longer has fails here.
+    # The deploy that crosses a change to the node: one bootstrapped from main,
+    # then sent this branch's head the way the deploy workflow sends it, by
+    # main's deploy.sh. A path that main's units or cron entries still call and
+    # this branch no longer has fails here, and so does a unit this branch
+    # dropped that is still installed.
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    env:
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.base_ref }}
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ env.HEAD_SHA }}
           path: head
       - name: The branch's image, as pull-image.sh will look for it
-        run: docker build -t "ghcr.io/${GITHUB_REPOSITORY,,}:${{ github.event.pull_request.head.sha }}" head
+        run: docker build -t "ghcr.io/${GITHUB_REPOSITORY,,}:$HEAD_SHA" head
       - name: Bootstrap from main
         env:
           BRANCH: ${{ github.head_ref }}
@@ -369,24 +351,25 @@ jobs:
           truncate -s 4G "$RUNNER_TEMP/data.img"
           dev=$(sudo losetup --find --show "$RUNNER_TEMP/data.img")
           sudo cp -r "$GITHUB_WORKSPACE" /opt/stride-lite
-          boot=deploy/aws/bin/bootstrap-node.sh
-          [ -f "$boot" ] || boot=scripts/bootstrap-node.sh
           sudo DATA_DEVICE="$dev" START_FIRST_LOAD=0 BRANCH="$BRANCH" \
             AWS_ACCESS_KEY_ID=AKIABOOTSTRAPTEST001 AWS_SECRET_ACCESS_KEY=bootstrap-test-secret \
-            bash "$boot"
+            bash deploy/aws/bin/bootstrap-node.sh
           for _ in $(seq 30); do curl -fsS http://127.0.0.1/healthz && break; sleep 2; done
-      - name: The timer deploys this branch over it
+      - name: Deploy this branch over it
         env:
           BRANCH: ${{ github.head_ref }}
         run: |
-          echo none | sudo tee /var/lib/stride-deploy/deployed
-          sudo systemctl start stride-deploy.service || { sudo journalctl -u stride-deploy --no-pager | tail -40; exit 1; }
-          head=$(git ls-remote origin "refs/heads/$BRANCH" | cut -f1)
-          test "$(sudo cat /var/lib/stride-deploy/deployed)" = "$head"
-          systemctl is-active clickhouse stride-api stride-deploy.timer
+          sudo COMMIT="$HEAD_SHA" BRANCH="$BRANCH" /opt/stride-lite/deploy/aws/bin/deploy.sh
+          test "$(sudo git -C /opt/stride-lite rev-parse HEAD)" = "$HEAD_SHA"
+          systemctl is-active clickhouse stride-api
           curl -fsS http://127.0.0.1/healthz
-          # Every unit and cron entry now names a path that exists.
-          for f in /etc/systemd/system/stride-*.service /etc/systemd/system/siri-requester.service /etc/cron.d/stride-*; do
+          # Every unit and cron entry names a path that exists, and every unit of
+          # ours is one this branch has.
+          for f in /etc/systemd/system/*.service /etc/systemd/system/*.timer /etc/cron.d/stride-*; do
+            grep -qs /opt/stride-lite "$f" "${f%.*}.service" || continue
+            case $f in /etc/systemd/*)
+              test -e "head/deploy/aws/node/systemd/$(basename "$f")" || { echo "$f is installed but this branch dropped it"; exit 1; } ;;
+            esac
             for p in $(grep -oE "/opt/stride-lite/[^ ;\"']+" "$f"); do
               test -e "$p" || { echo "$f names $p, which does not exist"; exit 1; }
             done
@@ -416,9 +399,6 @@ jobs:
       - name: The API's image is named for the unit, on a host with no /etc/stride-lite yet
         working-directory: .
         run: deploy/aws/tests/pull-image.sh
-      - name: The timer deploys main when it moves, once, and retries a failure
-        working-directory: .
-        run: deploy/aws/tests/auto-deploy.sh
       - name: A deploy waits for the ClickHouse it restarted before querying it
         working-directory: .
         run: tests/wait-for-clickhouse.sh
@@ -434,38 +414,3 @@ jobs:
       - name: Nothing particular to one environment outside deploy/
         working-directory: .
         run: tests/boundary.sh
-
-  differential:
-    # Compares endpoints against the live production API, which is a non-profit's
-    # production service. Never on push: only on the nightly schedule or on
-    # demand, with requests spaced out.
-    #
-    # Covers all 27 endpoints, and a coverage test fails if the published spec
-    # grows one this suite does not exercise.
-    #
-    # Still disabled, and only for want of data: loading the 154 GB dump in CI is
-    # not viable, so this needs a trimmed ClickHouse snapshot of the comparison
-    # window published somewhere the runner can reach. That window is bounded at
-    # both ends — 2025-01-01, where production's retention starts, to
-    # 2026-05-29, where the dump's data ends. See docs/FINDINGS.md.
-    if: false
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: api
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '26'
-          cache: npm
-          cache-dependency-path: api/package-lock.json
-      - run: npm ci
-      - run: npm start &
-      - run: npx wait-on http://127.0.0.1:8080/healthz --timeout 60000
-      - run: npx vitest run tests/differential.test.ts
-        env:
-          DIFF_DELAY_MS: '800'
-      # Needs the same loaded database and nothing from production, so it waits
-      # on the same snapshot this job waits on.
-      - run: npx vitest run tests/durations.test.ts

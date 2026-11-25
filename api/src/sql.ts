@@ -12,7 +12,7 @@ import { Params } from './ch'
  * `format: date-time` on 23: a date parameter takes `YYYY-MM-DD` and nothing
  * else, while a date-time parameter requires an offset and is converted to UTC.
  */
-export type FilterType =
+type FilterType =
   | 'in'
   | 'equals'
   | 'datetime_from'
@@ -226,7 +226,7 @@ function parseInstant(raw: string, round: 'up' | 'down'): string {
   return utc.toISOString().slice(0, 19).replace('T', ' ')
 }
 
-export interface BuildResult {
+interface BuildResult {
   sql: string
   isCount: boolean
   params: Record<string, unknown>

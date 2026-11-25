@@ -42,21 +42,33 @@ cp deploy/aws/node/systemd/* "$ROOT/etc/systemd/system/"
 cp deploy/aws/node/clickhouse-server/* "$ROOT/etc/clickhouse-server/"
 cp deploy/aws/node/cron/* "$ROOT/etc/cron.d/"
 grep -v CH_URL deploy/aws/node/systemd/stride-api.service > "$ROOT/etc/systemd/system/stride-api.service"
+# A unit of ours the repository no longer has, with its timer, and one that is
+# not ours at all.
+printf '[Service]\nExecStart=/opt/stride-lite/gone.sh\n' > "$ROOT/etc/systemd/system/stride-gone.service"
+printf '[Timer]\nOnUnitInactiveSec=5min\n' > "$ROOT/etc/systemd/system/stride-gone.timer"
+printf '[Service]\nExecStart=/usr/bin/true\n' > "$ROOT/etc/systemd/system/someone-else.service"
 
 run
 cmp -s deploy/aws/node/systemd/stride-api.service "$ROOT/etc/systemd/system/stride-api.service" \
   || fail "the stale stride-api.service was left in place"
 grep -qx daemon-reload "$CALLS" || fail "a changed unit was installed without daemon-reload"
-cmp -s deploy/aws/node/systemd/stride-deploy.timer "$ROOT/etc/systemd/system/stride-deploy.timer" \
-  || fail "the deploy timer was not installed"
-grep -qx 'enable --now stride-deploy.timer' "$CALLS" || fail "the deploy timer was not started"
-grep -qx 'enable --now siri-requester.timer' "$CALLS" || fail "the requester timer was not started"
+[ -e "$ROOT/etc/systemd/system/stride-gone.service" ] && fail "a unit the repository dropped was left installed"
+[ -e "$ROOT/etc/systemd/system/stride-gone.timer" ] && fail "the timer of a dropped unit was left installed"
+grep -qx 'disable --now stride-gone.timer' "$CALLS" || fail "the dropped timer was not stopped"
+grep -qx 'disable stride-gone.service' "$CALLS" || fail "the dropped service was not disabled, or was stopped"
+[ -e "$ROOT/etc/systemd/system/someone-else.service" ] || fail "removed a unit that is not ours"
+grep -qx 'disable --now siri-requester.timer' "$CALLS" || fail "the requester timer runs with no key to ask with"
 grep -qx 'enable --now gtfs-archive.timer' "$CALLS" || fail "the GTFS archive timer was not started"
 grep -qx 'enable --now swapfile.service' "$CALLS" || fail "the swap file was not turned on"
 grep -q 'restart clickhouse' "$CALLS" && fail "restarted ClickHouse although none of its files changed"
 
 run
-grep -qv '^enable ' "$CALLS" && fail "a second run with nothing changed still called: $(cat "$CALLS")"
+grep -qvE '^(enable|disable) ' "$CALLS" && fail "a second run with nothing changed still called: $(cat "$CALLS")"
+
+mkdir -p "$ROOT/etc/stride-lite"
+echo 'OPEN_BUS_MOT_KEY=k' > "$ROOT/etc/stride-lite/node.env"
+run
+grep -qx 'enable --now siri-requester.timer' "$CALLS" || fail "the requester timer was not started once the key was there"
 
 echo '<!-- edited -->' >> "$ROOT/etc/clickhouse-server/config.xml"
 run

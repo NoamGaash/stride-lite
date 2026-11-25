@@ -120,8 +120,4 @@ if [ "${START_FIRST_LOAD:-1}" != 0 ]; then
   systemctl start --no-block stride-first-load
 fi
 
-# What is checked out is what is installed, so deploy/aws/bin/auto-deploy.sh starts
-# from here rather than deploying the same commit again.
-install -d /var/lib/stride-deploy
-git rev-parse HEAD > /var/lib/stride-deploy/deployed
 echo "bootstrap complete" > /var/log/stride-bootstrap.done
