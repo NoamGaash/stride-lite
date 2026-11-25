@@ -5,11 +5,11 @@ broken here, and the failure is named so the rule is not mistaken for style advi
 
 ## The documents are the authority, not your memory of them
 
-`README.md` §"Who decided what" is the record of what the user asked for, what was assumed,
+`docs/DECISIONS.md` is the record of what the user asked for, what was assumed,
 and what was done. It outranks recollection in both directions.
 
 **Before claiming something is required, forbidden, or blocked by the contract, read that
-section.** Not a summary of it, the section.
+file.** Not a summary of it, the file.
 
 > It was already written there that public-transport data must be byte-for-byte identical
 > while internal ids may change. An `Int32` id was nonetheless presented to the user as a
@@ -26,11 +26,11 @@ rationale reconstructed from memory is a guess wearing a fact's clothes.
 ## Every session's decisions go back into the documents
 
 The user's standing requirement: what was asked, what was assumed or inferred, and what was
-done all end up in markdown. That is what §"Who decided what" is for, in three lists.
+done all end up in markdown. That is what `docs/DECISIONS.md` is for, in three lists.
 
 A session that changed the design and left that section untouched is unfinished. So is one
-that updated `README.md` and not `README.he.md` — they are a pair, and
-`grep -c '^#' README.md README.he.md` should agree.
+that updated an English document and not its `.he.md` twin — they are pairs, and
+`grep -c '^#'` on the two should agree.
 
 ## A measurement without its scope is not a measurement
 
@@ -74,6 +74,15 @@ Two reasons are legitimate and they are documented differently:
 - **Internal to us** — surrogate ids, ETL bookkeeping timestamps. Ours to choose. Note it.
 - **A production defect** — fixing it justifies departing from byte-for-byte. Open a finding
   in `docs/FINDINGS.md` and `docs/FINDINGS.he.md` with the measurement attached, and say in
-  the README that the divergence is intended.
+  `docs/DECISIONS.md` that the divergence is intended.
 
 Anything else is a defect here, whatever the comparison says.
+
+## The documents describe the present
+
+A newcomer should find a clean, current repository that invites a first contribution. The
+README and `docs/` say what is true now: no "moved in #NN", "deleted on <date>" or "was X
+until". What changed and why belongs in `docs/DECISIONS.md`, and the rest in git history.
+
+The same goes for the code: no dead code, and nothing on a node or in CI that runs without
+a purpose. A path kept only for a migration is removed in the change after it has run.

@@ -24,8 +24,8 @@
 # out the same ones.
 #
 # So with ENRICH=1 this script stops the chain itself rather than asking the
-# operator to remember. It used to only warn, in this comment, and that was not
-# enough: a run with the chain left on corrupted every day from 2026-07-26 on,
+# operator to remember. A warning was not enough: a run with the chain left on
+# corrupted every day from 2026-07-26 on,
 # duplicating up to 5.6M rows a day and — because both passes started from the
 # same max(id) — handing one id to two different readings, which makes `id` not
 # a key. ingest/verify.sql is the gate that catches it; this is what prevents it.

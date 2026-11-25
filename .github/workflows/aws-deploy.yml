@@ -40,7 +40,7 @@ jobs:
       group: deploy-approval
       cancel-in-progress: true
     steps:
-      - run: echo "approved ${{ github.sha }}"
+      - run: echo "approved ${{ github.event.workflow_run.head_sha || github.sha }}"
 
   deploy:
     needs: approve
@@ -133,15 +133,19 @@ jobs:
       # so waiting for it is what makes a first deploy safe — and it is also why
       # the script being absent is not an error here, since the bootstrap this
       # waits for is what clones it.
+      # The commit whose image was just published, named exactly: main may have
+      # moved since, to a commit whose image does not exist yet.
       - name: send the deploy
         id: send
+        env:
+          COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           id=$(aws ssm send-command \
             --instance-ids "${{ steps.target.outputs.instance }}" \
             --document-name AWS-RunShellScript \
-            --comment "deploy ${GITHUB_SHA::7}" \
+            --comment "deploy ${COMMIT::7}" \
             --timeout-seconds 3600 \
-            --parameters commands='["for _ in $(seq 1 120); do [ -f /var/log/stride-bootstrap.done ] && break; sleep 10; done; test -f /var/log/stride-bootstrap.done || { echo \"bootstrap never finished\" >&2; exit 1; }; BRANCH=main /opt/stride-lite/deploy/aws/bin/deploy.sh"]' \
+            --parameters commands='["for _ in $(seq 1 120); do [ -f /var/log/stride-bootstrap.done ] && break; sleep 10; done; test -f /var/log/stride-bootstrap.done || { echo \"bootstrap never finished\" >&2; exit 1; }; COMMIT='"$COMMIT"' /opt/stride-lite/deploy/aws/bin/deploy.sh"]' \
             --query 'Command.CommandId' --output text)
           echo "id=$id" >> "$GITHUB_OUTPUT"
 

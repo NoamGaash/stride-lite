@@ -193,7 +193,7 @@ curl 'http://127.0.0.1:8080/siri_routes/list?limit=2'
 ```
 
 ```bash
-npm test                                  # בדיקות יחידה על בניית SQL, בלי מסד נתונים
+npm test                                  # בדיקות היחידה, בלי מסד נתונים
 npx vitest run tests/differential.test.ts # משווה מול ה-API החי של הפרודקשן
 ```
 

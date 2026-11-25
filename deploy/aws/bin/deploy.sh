@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Brings a running node up to a commit. Runs on the node, sent by SSM from
-# .github/workflows/aws-deploy.yml or started by deploy/aws/bin/auto-deploy.sh.
+# Brings a running node up to a commit: COMMIT if set, else the head of BRANCH.
+# Runs on the node, sent by SSM from .github/workflows/aws-deploy.yml with the
+# commit whose image CI has just published. What it prints is also kept in
+# /var/log/stride-deploy.log, which /ops/logs?source=deploy serves.
 #
 # deploy/aws/bootstrap.sh is user_data, so it runs once per instance launch: it is how
 # a node is born, not how it is updated. `user_data_replace_on_change = false` is
@@ -8,21 +10,17 @@
 # volume and the hours of first load on it are the expensive part. So a deploy is
 # this script, in place.
 set -euxo pipefail
+exec > >(tee >("$(dirname "$0")/stamp-lines.sh" >> /var/log/stride-deploy.log)) 2>&1
 
 REPO=${REPO:-/opt/stride-lite}
 BRANCH=${BRANCH:-main}
 LOCK=${FIRST_LOAD_LOCK:-/var/lock/stride-catchup}
 export CH_DB=${CH_DB:-stride}
 export CH_CLIENT=${CH_CLIENT:-clickhouse client}
-DEPLOY_STATE=${DEPLOY_STATE:-/var/lib/stride-deploy/deployed}
-
-# One deploy at a time, whichever of SSM and the timer started it.
-exec 8> /var/lock/stride-deploy
-flock 8
 
 cd "$REPO"
 # The instance clones --depth 1, so fetch the same way and move to it.
-git fetch --depth 1 origin "$BRANCH"
+git fetch --depth 1 origin "${COMMIT:-$BRANCH}"
 git reset --hard FETCH_HEAD
 
 # deploy/aws/bin/siri-request.sh compresses with it; bootstrap installs it on a new node.
@@ -37,8 +35,9 @@ RESTART_CHANGED=1 ./deploy/aws/bin/install-node-config.sh
 # it is duplicated ids: both the dump's own and the enrichment's are minted from
 # max(id), and that failure cost this project twenty-nine days of data.
 #
-# Skipping is deliberate and bounded: the next deploy converges the schema, and
-# the first load's own `live` stage installs the ingest chain this would have.
+# Skipping is deliberate and bounded: running the deploy again converges the
+# schema, and the first load's own `live` stage installs the ingest chain this
+# would have.
 if flock -w 600 9; then
   # Tables, then migrations, then views, then projections — the order
   # apply-schema.sh enforces, and the reason a view may read a column a
@@ -85,9 +84,9 @@ test "$(clickhouse client --query "
   SELECT count() FROM system.view_refreshes
   WHERE database = '$CH_DB' AND exception != ''")" = 0
 
-# Not recorded when the schema was left for later, so deploy/aws/bin/auto-deploy.sh
-# tries this commit again on its next tick instead of counting it done.
-if [ "${schema_left:-0}" = 0 ]; then
-  mkdir -p "$(dirname "$DEPLOY_STATE")"
-  git rev-parse HEAD > "$DEPLOY_STATE"
+# The code is live but the schema is not, so the run says so by failing.
+# Running it again once the first load is done converges the rest.
+if [ "${schema_left:-0}" = 1 ]; then
+  echo "the schema was left for a later deploy: run this one again"
+  exit 1
 fi

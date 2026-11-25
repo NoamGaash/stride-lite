@@ -7,9 +7,8 @@ Wants=network-online.target
 Type=oneshot
 EnvironmentFile=-/etc/stride-lite/node.env
 StateDirectory=siri-requester
-# The Ministry answers only an allowlisted address with a key of its own, so
-# until OPEN_BUS_MOT_KEY is in node.env each run is skipped, not failed.
-ExecCondition=/bin/sh -c 'test -n "$$OPEN_BUS_MOT_KEY"'
+# Its timer is enabled only once OPEN_BUS_MOT_KEY is in node.env
+# (deploy/aws/bin/install-node-config.sh).
 ExecStart=/opt/stride-lite/deploy/aws/bin/siri-request.sh
 # A run still going when the next one is due is hung; this ends it.
 TimeoutStartSec=14

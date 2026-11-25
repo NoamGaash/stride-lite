@@ -37,10 +37,11 @@ script and not a paragraph.
 
 A one-year no-upfront reservation on the instance takes it to **$1.80 a day, $55 a month**.
 
-The node ran as a `t4g.large` (8 GB, $49.06 a month) until 2026-11-20. Ten hours of
-`/ops/metrics` history then showed 1.5 GB in use at the 95th percentile, so it moved to 4 GB.
+The size is measured, not guessed: over the day ending 2026-11-25 13:02 UTC, `/ops/metrics`
+on the `t4g.medium` showed 0.75 GB of memory in use on average, 0.80 GB at the 95th percentile
+and 1.33 GB at most, with a load average of 0.61 on its two cores.
 
-**The backup line is new and it buys one thing: a fresh instance that fills itself in an hour
+**The backup line buys one thing: a fresh instance that fills itself in an hour
 instead of days, without reading a non-profit's bucket.** 7% of the bill. `-var
 backup_bucket_enabled=false` removes it, and then every fresh instance rebuilds from public
 data — reproducible, still correct, and the expense is no longer ours. See §"Day one".
@@ -60,9 +61,9 @@ Two consequences, and both run against instinct.
 **The data pipeline is free.** Ingest, enrichment, scheduling and the CDN together are a
 third of one percent of the bill. There is nothing to optimise there, and no case for choosing
 a cheaper engine or a thriftier query. That also means same-region reads of the archive, which
-used to be the reason for picking eu-west-1, are worth almost nothing: measured, the archive is
-13.2 MiB per hour of SIRI, about 14 GB a month with GTFS, which is under $1.30 even at the
-internet rate against $10.06 a month more for the same hardware in Ireland.
+would be the reason for picking eu-west-1, are worth almost nothing: measured, the archive is
+7.4 MiB per hour of SIRI (October 2026), about 11 GB a month with GTFS, which is about $1 even
+at the internet rate against $10.06 a month more for the same hardware in Ireland.
 
 **The only lever that moves the number is whether the machine is on.** Not its size, not its
 software. See below.
@@ -239,11 +240,11 @@ deliberately contains:
 | --- | --- |
 | EBS snapshots | a volume restored from a snapshot loads its blocks lazily from S3, so the first reads are slow exactly when they are needed, and Fast Snapshot Restore costs more than the storage it saves |
 | A second instance, failover, a load balancer | downtime costs compute to recover, not data |
-| Health alarms, paging, an on-call path | nothing to be woken up for |
+| Paging, an on-call path | nothing to be woken up for. `deploy/aws/recovery.tf` reboots a node that stops answering and moves one whose host fails, with nobody involved |
 | A budget alarm | **this one is here** — see below |
 
-**One thing this table used to rule out is now here, and the reason the argument above does not
-cover it: a restorable copy of the database in S3.** The argument above is about *losing* a
+**A restorable copy of the database in S3 is here, and the argument above does not cover
+it.** The argument above is about *losing* a
 node, and it still holds — the node is derived and the archive is the system of record.
 `var.backup_bucket_enabled` is about *filling* one. Recovering a week of gap is 41 minutes of
 compute; recovering the whole history from public data is days of compute and $3.75 of
@@ -260,9 +261,9 @@ genuinely has, and it lives in the existing infrastructure, not in this one.
 
 ### Measuring a real run, which the bill will not do
 
-The plan is to point the frontend at this deployment for a few days and measure. Traffic
-volume is the one input the whole cost model lacks — everything else here is measured — so
-that is the right experiment. It has one trap.
+The frontend uses this deployment by default, so real traffic reaches it. Traffic volume is the
+one input the whole cost model lacks — everything else here is measured — and measuring it has
+one trap.
 
 **CloudFront's free tier is permanent: the first 1 TB and the first 10 million requests every
 month.** A few days of real traffic will almost certainly fit inside it, so Cost Explorer will
@@ -359,7 +360,7 @@ ingest and enrichment chains, backfills two hours of live SIRI from S3, and star
 
 ```bash
 curl 'http://127.0.0.1:8080/siri_routes/list?limit=2'
-cd api && npm test       # 35 unit tests, no DB needed
+cd api && npm test       # the unit tests, no DB needed
 ```
 
 For the full 13.7-billion-row history instead of live data (~14 h on six throttled cores,
@@ -407,7 +408,7 @@ that never needs rescheduling. `deploy/aws/main.tf` provisions:
 | `aws_iam_role.instance` + SSM policy | instance profile | shell access via SSM, so no key to manage |
 | `aws_s3_bucket.backup` + a role for ClickHouse to assume | `stride-lite-backup-<account-id>` | the restorable copy of the database, so a fresh instance fills itself in an hour. `prevent_destroy`, for the same reason the data volume has it |
 | `aws_acm_certificate.api`, when `api_domain` is set | a certificate in us-east-1 | CloudFront reads certificates from there and nowhere else |
-| `deploy/aws/bootstrap.sh` as `user_data` | installs ClickHouse, Node, the schema, the crons, and starts the first load | a launched instance serves the API, and fills itself, with no further steps |
+| `deploy/aws/bootstrap.sh` as `user_data` | installs ClickHouse and Docker, pulls the API's image, applies the schema, installs the units and crons, and starts the first load | a launched instance serves the API, and fills itself, with no further steps |
 | `aws_budgets_budget.monthly` | alerts at 50/80/100% of `budget_usd` | the only unrecoverable failure here is spend |
 
 ```bash
@@ -421,7 +422,7 @@ the data volume outlives the instance, and reformatting it is the one destructiv
 repository.
 
 **Region: us-east-1**, because it is the cheapest and that is the recorded priority —
-README.md §"Who decided what" carries "Cheapest wins, some performance loss is acceptable", and
+[DECISIONS.md](DECISIONS.md) carries "Cheapest wins, some performance loss is acceptable", and
 that is the line that ruled out eu-west-1 for same-region reads. It was decided on steady state
 alone, so here it is re-priced against the bulk load, which is the thing it did not cover.
 
@@ -432,8 +433,7 @@ region, $0.09/GB to the internet**, and the `AmazonS3` eu-west-1 offer file has 
 line at all, so a reader in eu-west-1 costs the owner nothing but requests. Measured volumes:
 the dump is 154,630,881,726 bytes, and the whole SIRI archive is 288,970,717,345 bytes
 (269.1 GiB) in 2,794,246 objects — measured by `LIST` on 2026-11-07, so no bytes were moved to
-measure it. October 2026 alone is 5.37 GiB in 44,293 objects, about **7.4 MiB an hour of feed**
-and not the 13.2 MiB this repository used to quote.
+measure it. October 2026 alone is 5.37 GiB in 44,293 objects, about **7.4 MiB an hour of feed**.
 
 | | us-east-1 | eu-west-1 |
 | --- | --- | --- |
@@ -457,13 +457,10 @@ strings, and **it is still not measured from Israel.**
 
 ### A name the frontend can actually reach
 
-`output "api_url"` is a `*.cloudfront.net` name until `var.api_domain` is set, and that is not
-merely untidy: the frontend's production CSP allows `connect-src https://*.hasadna.org.il` and
-nothing else, enforced identically in its `csp.ts` and `nginx-default.conf` with a test
-asserting the two match byte for byte. So the frontend's `VITE_STRIDE_LITE_API` opt-in
-(hasadna/open-bus-map-search#1929) **cannot be switched on against the default name at all**,
-whatever is put in the variable. Either this deployment gets a name in that zone, or two files
-in the frontend change; the first touches nobody else's repository.
+`output "api_url"` is a `*.cloudfront.net` name until `var.api_domain` is set. The frontend
+reaches it under that name: its CSP, in `csp.ts` and `nginx-default.conf`, allows
+`https://*.cloudfront.net` beside `https://*.hasadna.org.il`, and its `VITE_STRIDE_LITE_API`
+points at the distribution. A name in `hasadna.org.il` is optional.
 
 Setting `-var api_domain=stride-lite.hasadna.org.il` makes Terraform request an ACM certificate
 in **us-east-1 regardless of `var.region`** — CloudFront reads certificates from there and
@@ -489,16 +486,18 @@ else has added a DNS record is not a condition of our deploy succeeding.
 
 ### Deploying from CI, and what has to exist first
 
-`.github/workflows/aws-deploy.yml` runs on every push to `main`. It does two things, because they
-are two things and only the first is Terraform's:
+`.github/workflows/aws-deploy.yml` runs when the `image` workflow has published the image of a
+new commit on `main`. It does two things, because they are two things and only the first is
+Terraform's:
 
 1. `terraform plan` and `terraform apply`, which converges the AWS resources above.
-2. `deploy/aws/bin/deploy.sh` on the instance, sent over SSM, which is what actually puts new code
-   there.
+2. `deploy/aws/bin/deploy.sh` on the instance, sent over SSM with that commit, which is what
+   actually puts new code there. Nothing on the node polls for commits; this is the only way
+   a change reaches it.
 
 The second step is not redundant. `bootstrap.sh` is `user_data`, so it runs once per instance
 launch, and `user_data_replace_on_change = false` is deliberate: a push must not replace the
-instance, because the 400 GB volume and the hours of backfill on it are the expensive part.
+instance, because the 350 GB volume and the hours of backfill on it are the expensive part.
 Without step 2 a push would change nothing a user can see. SSM is the channel because it is
 already there — there is no key pair and no open port 22.
 
@@ -587,7 +586,7 @@ After a deploy, or any change to the node, `scripts/check-production.sh` checks 
 service from the outside:
 - SIRI is fresh, and today's GTFS is loaded;
 - no refreshable view is failing, and there has been no `MEMORY_LIMIT_EXCEEDED` in the last day;
-- the differential suite matches production.
+- the differential suite matches production, and recent rides carry their durations.
 
 It also lists the endpoints that failed in the last hour. `SKIP_DIFF=1` drops the two-minute
 comparison.
@@ -602,16 +601,12 @@ run and the trust policy admits one repository.
 
 ### What the first deploy leaves you with
 
-**The whole history, without anybody running a command.** That is new, and this section used to
-say the opposite — "a working API over a nearly empty database, and that is not a bug to chase".
-It was a bug, and this is what it was: `bootstrap.sh` applied the schema and started the
-refreshable views, which read the running hour from S3, so data accumulated from go-live forward
-and nothing before it existed. `ingest/catchup.sh` refuses an empty database on purpose ("a
-first load is `./up.sh`, not a catch-up"), because it walks forward from the newest snapshot
-actually loaded and there was none. Nothing loaded history. A deploy produced an API that
-answered every query with an empty list.
+**The whole history, without anybody running a command.** Without it a new node would serve an
+empty database: the refreshable views read the running hour from S3, so data accumulates from
+go-live forward and nothing before it exists, and `ingest/catchup.sh` refuses an empty database
+on purpose, because it walks forward from the newest snapshot actually loaded.
 
-`deploy/aws/bootstrap.sh` now ends by starting `stride-first-load.service`, a `oneshot` unit that
+`deploy/aws/bootstrap.sh` ends by starting `stride-first-load.service`, a `oneshot` unit that
 runs [`scripts/first-load.sh`](../scripts/first-load.sh) once. Five stages, each skipped when
 the state file on the data volume says it finished:
 
@@ -635,7 +630,8 @@ timeout is 90 seconds and this job is measured in hours.
 **It does not run alongside the ingest.** The unit takes `/var/lock/stride-catchup`, the lock the
 hourly `catchup.sh` cron already uses with `flock -n`, so a tick during a first load does not
 run rather than queueing behind it. `deploy/aws/bin/deploy.sh` takes the same lock with a ten-minute
-wait and, if it cannot get it, updates the code and leaves the schema to the next deploy.
+wait and, if it cannot get it, updates the code, leaves the schema alone and fails, so the run
+shows red and running it again later finishes the job.
 
 **The live chain is installed after the history, not before.** The dump carries its own `id`
 values and the enrichment mints ids as `max(id) + row_number()`; both writing at once hands one
@@ -674,11 +670,9 @@ Three kinds, and only one of them needs a migration.
 | Any view, including the refreshable ones | `CREATE OR REPLACE`, so the file is always what the database holds |
 | A change to a table that already holds data | a numbered file in `db/migrations/`, run once, recorded in `schema_migrations` |
 
-The second row is a correction, not a design. These were `CREATE MATERIALIZED VIEW IF NOT
-EXISTS`, and measured on ClickHouse 26.10 a changed body under `IF NOT EXISTS` is **accepted
-and silently discarded** — no error, no warning, and the file and the database drift apart with
-nothing to say so. That is exactly how `gtfs_rides_agg_by_hour` sat frozen at the dump's last
-day while the differential suite stayed green. CI now asserts the opposite: it applies a
+Views are replaced rather than created `IF NOT EXISTS` because, measured on ClickHouse 26.10,
+a changed body under `IF NOT EXISTS` is **accepted and silently discarded** — no error, no
+warning, and the file and the database drift apart with nothing to say so. CI applies a
 changed view body and fails if the database does not take it.
 
 Two measurements that made `CREATE OR REPLACE` safe to use here rather than assumed to be:
@@ -714,7 +708,7 @@ serves ministry data that is already public — and so is the data.
 | `GET /status` — ingest freshness from `system.view_refreshes` and the newest snapshot id | Operational state with nothing secret in it, and the thing a reader actually wants: is the data current. Measured at 55 ms, behind the CDN |
 | `GET /coverage` — per-day data health from `ingest_day_health`: `day`, `snapshots`, `vehicle_locations`, `duplicate_ids`, `rides`, `rides_with_duration`, `rides_linked_to_gtfs`, `measured_at`, newest day first, `?limit=` defaulting to 90 and capped at 10,000 | Public for the same reason, and it answers the question production cannot. Finding 13 is twenty months of "zero buses ran" that reads as data rather than as an outage, because `/gtfs_rides_agg/group_by` returns 0 either way. Here a day says how many snapshots arrived, how many rows were derived from them, and whether its ids are sound — so "nothing ran", "nothing arrived" and "we broke it" are three different rows and not one |
 | `GET /ops/metrics` — disk free, table sizes, mutations and running merges (a projection being built counts down here), refresh history, ClickHouse errors of the last day, memory and load, and the API's own request count and p50/p95 latency per endpoint over the last hour, plus the five commonest paths that are not endpoints (scanners, typos), cut to 80 characters and redacted, with the rest as one `other` row. Cached 15 s | Public so that anyone can watch the node and help. It reads no table that records a client address, and the request counts keep the path and nothing about the requester |
-| `GET /ops/logs` — the tail of `first-load`, `catchup`, `gtfs`, `clickhouse` and the API journal; `?source=` picks one, `?lines=` defaults to 200 and is capped at 2,000. Cached 15 s | A fixed list, no path parameter. None of these is a request log, and none may become one: that is what keeps visitors' addresses out. IPv4/IPv6 addresses and the AWS account id are redacted from every line as a second line of defence |
+| `GET /ops/logs` — the tail of `first-load`, `catchup`, `gtfs`, `deploy`, `clickhouse`, the API, the requesters (`requester`, `naim-rt`) and `gtfs-archive`; `?source=` picks one, `?lines=` defaults to 200 and is capped at 2,000. Cached 15 s | A fixed list, no path parameter. None of these is a request log, and none may become one: that is what keeps visitors' addresses out. IPv4/IPv6 addresses and the AWS account id are redacted from every line as a second line of defence |
 | `deploy/aws/rates.json` and `deploy/aws/bin/measure-cost.py` | Public rates and a script. An estimate nobody can re-derive is one nobody should act on |
 
 **The state bucket stays private, and the honest reason is not secrets.** This configuration
@@ -741,8 +735,8 @@ appears verbatim in `terraform.tfstate`.
 AWS blocks public access on new buckets by default. Leave that on.
 
 **CloudWatch, and why there is none.** Nothing here ships logs anywhere: ClickHouse writes to
-`/var/log/clickhouse-server/`, the two cron jobs to `/var/log/stride-*.log`, and the API to the
-journal. That is not an oversight to be fixed by turning CloudWatch on, for two reasons. It
+`/var/log/clickhouse-server/`, the cron jobs and the deploy to `/var/log/stride-*.log`, and the
+API and the timers to the journal. That is not an oversight to be fixed by turning CloudWatch on, for two reasons. It
 costs $0.50 per GB ingested and $0.03 per GB stored, which is a new line on a bill this
 project is arguing down. And a CloudWatch log group **cannot be made public** — there is no
 public-read mode for one, so shipping logs there would move operational state further from the
@@ -832,15 +826,6 @@ the same total disk split between them, and two addresses: $133.42 a month. A si
 `t4g.xlarge` with twice the cores and twice the memory is $129.76. The same money, and it needs
 no distributed tables, no cluster configuration and no replication to operate.
 
-This paragraph used to add "and it lifts the 4 GiB ceiling that an unfiltered
-`/siri_rides/list` hits". That measurement was taken against a 4 GiB cap, and the local cap is
-now 8 GiB (`deploy/local/local.xml`), chosen to match the `t4g.large` this module actually deploys —
-so the old figure measured a box stricter than the target and says nothing about this one.
-**Whether 8 GiB is enough for that call is not measured.** Re-measuring it means running an
-unfiltered three-way join on the shared database that the ingest and enrichment chains are
-writing to, and a `MEMORY_LIMIT_EXCEEDED` there is not confined to the query that caused it.
-It is worth doing on a throwaway instance and it has not been done.
-
 So the order is: fix the query, then buy a bigger box, and only then think about a second one.
 The cases where a second one is actually the answer are:
 
@@ -884,26 +869,13 @@ Honest status, so nobody deploys this expecting a finished system:
 
 - **27 of 27 endpoints** match production byte for byte, over 48 differential tests.
 - **The pipeline is complete.** SIRI flows `ingest/siri.sql` → `ingest/enrich.sql` → the API,
-  and GTFS loads a day in 35 s through `ingest/gtfs.sh`.
-- **The local database is not a complete history, so it is not yet the thing to copy.**
-  Measured 2026-11-07: September and October 2026 were never loaded, most of November is
-  missing, 2026-08-19 and 2026-08-20 are short at the download (455 and 1,318 snapshots against
-  about 1,430), and twenty-five days carry duplicate ids. `scripts/first-load.sh` is written
-  against a sound source and does not check whether the backup it restores is one —
+  and GTFS loads a day in 35 s through `ingest/gtfs.sh`, every GTFS table included.
+- **`scripts/first-load.sh` does not check whether the backup it restores is sound.**
   `GET /coverage` and `ingest/verify.sql` are what answer that, and they have to be clean
-  before the `publish` stage is allowed to define what every later instance holds.
-- **The first load has not been run on AWS.** Every mechanism in it is tested — the streaming
-  dump load, the stage machine's skip, retry and refusal, the chain being stopped and restarted
-  around a reload, `BACKUP`/`RESTORE` round-tripping a 22-table database with its projections —
-  but on a sandbox ClickHouse against a miniature dump, not on an instance against the real
-  one. The S3 transport and the STS hop that signs it are unverified.
-- **`gtfs_ride_stop` is loaded but not refreshed.** It is a quarter of the database on its own
-  and the daily GTFS loader replaces the rest of the GTFS tables, not this one.
-- **Nothing has run unattended for 24 hours.** Ingest and enrichment cost 14.7 s per hour of
-  feed, so a week of missed data takes about 41 minutes — but RSS and CPU held over a full day
-  of continuous running are unmeasured, and that is the number a deployment should be sized on.
+  before the `publish` stage defines what every later instance holds. The days in
+  [the roadmap](../ROADMAP.md)'s known gaps are not.
 - **`/siri_velocity_aggregation` is not reproducible**, in production either — see
   [FINDINGS.md](FINDINGS.md) finding 5.
-- **The `siri_ride_stop` projection is predicted, not measured.**
+- **The `siri_ride_stop` projection's speed is predicted, not measured.**
 
 [ROADMAP.md](../ROADMAP.md) tracks all of it.

@@ -40,8 +40,8 @@ provider "aws" {
 # Measured by unsigned LIST on 2026-11-07, so no object bytes were moved to
 # measure it: the whole SIRI archive is 288,970,717,345 bytes (269.1 GiB) in
 # 2,794,246 objects, 2021/04 to 2026/11, and October 2026 alone is 5.37 GiB in
-# 44,293 objects — about 7.4 MiB an hour of feed, not the 13.2 MiB this comment
-# used to claim. The dump is 154,630,881,726 bytes.
+# 44,293 objects — about 7.4 MiB an hour of feed. The dump is 154,630,881,726
+# bytes.
 #
 # Dollars below treat a GB as 10^9 bytes, which is how the byte counts were
 # converted and not something verified against how AWS meters transfer; at 2^30
@@ -117,11 +117,10 @@ variable "instance_type" {
 # 300 GB is 279.4 GiB usable, which is full on arrival and leaves nothing for a
 # merge to work in; 350 GB is 326.0 GiB and leaves about 61 GiB.
 #
-# How long 61 GiB lasts is now two numbers, not one, because the landing rows
-# are kept: the typed tables grow at the measured +36 GiB a year and
+# How long 61 GiB lasts is two numbers, not one, because the landing rows are
+# kept: the typed tables grow at the measured +36 GiB a year and
 # siri_vehicle_location_raw adds 2.80 GiB a month on top (measured: 133.76M rows
-# for 2026/08), so about +70 GiB a year. That is ten months, not the sixteen
-# this comment used to claim from the typed tables alone.
+# for 2026/08), so about +70 GiB a year. That is ten months.
 #
 # The first load needs no headroom beyond that figure, which is the one thing
 # worth knowing before raising it: scripts/load-from-dump.sh streams, so the

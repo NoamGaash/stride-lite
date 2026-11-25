@@ -5,7 +5,8 @@
 # deploy; bootstrap alone is not enough, because it runs once per instance and a
 # fix to it never reaches a node that already exists.
 #
-# Only files that differ are written. With RESTART_CHANGED=1 ClickHouse is
+# Only files that differ are written, and a unit of ours that deploy/aws/node no
+# longer has is disabled and removed. With RESTART_CHANGED=1 ClickHouse is
 # restarted when its own config or unit changed — never otherwise, since a
 # restart interrupts ingestion and any projection still materialising.
 # stride-api is the caller's to restart; stride-first-load is never started here.
@@ -38,16 +39,33 @@ for f in "$SRC"/systemd/*.service "$SRC"/systemd/*.timer; do
     [ "$(basename "$f")" = clickhouse.service ] && clickhouse_changed=1
   fi
 done
+# Ours means it runs something from /opt/stride-lite, or is the timer of a
+# service that does. A service is only disabled, not stopped: the run in
+# progress may be the one that removed it.
+stale=()
+for f in "$ROOT"/etc/systemd/system/*.service "$ROOT"/etc/systemd/system/*.timer; do
+  [ -e "$f" ] && [ ! -e "$SRC/systemd/$(basename "$f")" ] || continue
+  grep -qs /opt/stride-lite "$f" "${f%.*}.service" && stale+=("$f")
+done
+for f in "${stale[@]}"; do
+  case $f in *.timer) $SYSTEMCTL disable --now "$(basename "$f")" ;; *) $SYSTEMCTL disable "$(basename "$f")" ;; esac
+  rm "$f"
+  echo "removed ${f#"$ROOT"}"
+  units_changed=1
+done
 for f in "$SRC"/cron/*; do
   put "$f" "/etc/cron.d/$(basename "$f")" || true
 done
 
 [ "$units_changed" = 0 ] || $SYSTEMCTL daemon-reload
 $SYSTEMCTL enable clickhouse stride-api stride-first-load
-$SYSTEMCTL enable --now stride-deploy.timer
 $SYSTEMCTL enable --now swapfile.service
-# Every 15 seconds; each run is skipped until a Ministry key is in node.env.
-$SYSTEMCTL enable --now siri-requester.timer
+# Every 15 seconds, once there is a Ministry key to ask with.
+if grep -qs '^OPEN_BUS_MOT_KEY=.' "$ROOT/etc/stride-lite/node.env"; then
+  $SYSTEMCTL enable --now siri-requester.timer
+else
+  $SYSTEMCTL disable --now siri-requester.timer
+fi
 $SYSTEMCTL enable --now gtfs-archive.timer
 $SYSTEMCTL enable --now naim-rt-request.timer
 

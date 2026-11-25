@@ -43,7 +43,7 @@ interface Parameter {
   [key: string]: unknown
 }
 
-export interface Spec {
+interface Spec {
   servers?: unknown
   paths: Record<string, { get?: { parameters?: Parameter[] } }>
 }
